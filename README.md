@@ -4,7 +4,7 @@ Smart Process Analytics (SPA) is a Python software for predictive modeling. It i
 
 The [Smart\_Process\_Analytics.py](Smart_Process_Analytics.py) file is the main function, which provides the default predictive modeling and the final, evaluated model. All the other files needed to run [Smart\_Process\_Analytics.py](Smart_Process_Analytics.py) are stored in [Code-SPA](Code-SPA). To run SPA on your computer, simply download the [Code-SPA](Code-SPA) folder.
 
-If you want to reset the default hyperparameters in the [Smart\_Process\_Analytics.py](Smart_Process_Analytics.py) file or use other functionalities (e.g., model fitting for multiple times series data set using one model), you can use the data interrogation, model construction and residual analysis by yourself. One example is provided in the file [Example\_1.py](Example/Example_\1.py), which uses different methods directly called from the [cv\_final.py](Code-SPA/cv_final.py) file using the 3D printer example data in the original paper.
+If you want to reset the default hyperparameters in the [Smart\_Process\_Analytics.py](Smart_Process_Analytics.py) file or use other functionalities (e.g., model fitting for multiple times series data set using one model), you can use the data interrogation, model construction and residual analysis by yourself. One example is provided in the file [Example\_1.py](Example/Example_1.py), which uses different methods directly called from the [cv\_final.py](Code-SPA/cv_final.py) file using the 3D printer example data in the original paper.
 
 The major files in SPA are:
 1. [dataset\_property\_new.py](Code-SPA/dataset_property_new.py): functions for data interrogation.
