@@ -131,3 +131,7 @@ dmypy.json
 # Plots
 /Code-SPA/*.png
 
+# To run Example 1 more easily
+/Code-SPA/Example_1.py
+/Code-SPA/Printer.xlsx
+
