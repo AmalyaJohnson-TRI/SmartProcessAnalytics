@@ -330,7 +330,7 @@ def dynamic_assess(x, plot=1, y = None, round_number = 0, alpha = 0.01, freq = 1
     plt.savefig('FFT_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')  
     return (acf_lag, pacf_lag)
   
-def residual_analysis(X, y, y_hat, nlag =None, alpha = 0.01, round_number = 0):
+def residual_analysis(X, y, y_hat, nlag = None, alpha = 0.01, round_number = 0, log_transform = False):
     """
     This funcion assesses the residuals (heteroscedasticity and dyanmics)
     Heteroscedasticity is tested on Breusch-Pagan Test and White Test
@@ -347,7 +347,18 @@ def residual_analysis(X, y, y_hat, nlag =None, alpha = 0.01, round_number = 0):
         (int_heteroscedasticity, int_dynamics), whether there is heteroscedasticity and dynamics
     """
     print('=== Residual Analysis ===')
+    if log_transform:
+        y = np.exp(y)
+        y_hat = np.exp(y_hat)
+        # ytrain = np.exp(ytrain)
+        # ytrain_hat = np.exp(ytrain_hat)
+
     residual = y-y_hat
+    RMSE = np.sqrt(np.mean((residual)**2))
+    APE = np.mean(np.abs((residual) / y)) * 100
+    print(f'RMSE = {RMSE}')
+    print(f'APE = {APE}')
+
     if nlag is None:
         if y.shape[0] < 40:
             #nlag = 10
