@@ -334,7 +334,7 @@ def residual_analysis(X, y, y_hat, nlag = None, alpha = 0.01, round_number = 0, 
     """
     This funcion assesses the residuals (heteroscedasticity and dyanmics)
     Heteroscedasticity is tested on Breusch-Pagan Test and White Test
-    Dyanmics is assessed based on ACF and PACF
+    Dynamics is assessed based on ACF and PACF
     
     Input: 
         X: independent variables of size N x m
@@ -361,8 +361,7 @@ def residual_analysis(X, y, y_hat, nlag = None, alpha = 0.01, round_number = 0, 
 
     if nlag is None:
         if y.shape[0] < 40:
-            #nlag = 10
-            nlag = y.shape[0]//2 - 1 # Apparently nlag must be < y.shape[0], else sm.graphics.tsa.plot_acf() returns an error. It must also be < 0.5*y.shape[0], else sm.graphics.tsa.plot_pacf() returns an error.
+            nlag = y.shape[0]//2 - 1 # nlag must be < y.shape[0], else sm.graphics.tsa.plot_acf() returns an error. It must also be < 0.5*y.shape[0], else sm.graphics.tsa.plot_pacf() returns an error.
         elif y.shape[0] > 200:
             nlag = 50
         else:
@@ -426,11 +425,9 @@ def residual_analysis(X, y, y_hat, nlag = None, alpha = 0.01, round_number = 0, 
     # White test for heteroscedasticity
     test_white = sms.het_white(residual, np.column_stack((np.ones((y_hat.shape[0],1)),y_hat)))
     White_test = dict(zip(name,test_white[2:]))
-    
-    int_heteroscedasticity = 1
-    if test_GF[1] > alpha and test_BP[-1] > alpha and test_white[-1] > alpha:
-        int_heteroscedasticity = 0
-    
+    int_heteroscedasticity = not(test_GF[1] > alpha and test_BP[-1] > alpha and test_white[-1] > alpha) # All tests > alpha -> int_heteroscedasticity = False
+    # TODO: shouldn't we have some sort of correction (Bonferroni, etc.) because we're doing 3 tests?
+
     # Dynamics
     # Autocorrelation
     fig = plt.figure(figsize=(5,3))
@@ -441,7 +438,6 @@ def residual_analysis(X, y, y_hat, nlag = None, alpha = 0.01, round_number = 0, 
     ax1.set_xlabel('Lag')
     plt.tight_layout()
     plt.savefig('ACF_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
-    
     # Partial autocorrelation
     fig = plt.figure(figsize=(5,3))
     ax2 = fig.add_subplot(111)    
@@ -451,21 +447,15 @@ def residual_analysis(X, y, y_hat, nlag = None, alpha = 0.01, round_number = 0, 
     ax2.set_xlabel('Lag')
     plt.tight_layout()
     plt.savefig('PACF_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
-    
     # ACF
     [acf, confint, qstat, acf_pvalues] = sm.tsa.stattools.acf(residual, nlags=nlag,qstat = True, alpha = alpha)
     acf_detection = acf_pvalues < (alpha/nlag) # Ljung-Box Q-Statistic
     acf_lag = [i for i,x in enumerate(acf_detection) if x == True] 
-      
     # PACF
     [pacf, confint_pacf] = sm.tsa.stattools.pacf(residual, nlags=nlag, alpha = alpha)
     pacf_lag = [i for i,x in enumerate(pacf) if x<confint_pacf[i][0] or x>confint_pacf[i][1]]
     
-    if acf_lag != [] or pacf_lag != []:
-        int_dynamics = 1
-    else:
-        int_dynamics = 0
-        
+    int_dynamics = bool(acf_lag + pacf_lag)
     return (int_heteroscedasticity, int_dynamics)
 
 def nonlinearity_assess_dynamic(X, y, plot, cat=None, alpha = 0.01, difference = 0.4, xticks = None, yticks = None, round_number = 0, lag = 3):
