@@ -1,8 +1,6 @@
 """
-Created on Wed Feb 19 00:56:16 2020
-
-@author: Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com
-(c) 2020 Weike Sun, all rights reserved
+Original work by Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com
+Modified by Pedro Seber
 """
 
 from pandas import read_excel, read_csv
@@ -14,10 +12,12 @@ from os import splitext
 import matplotlib as mpl
 mpl.style.use('default')
 import warnings
+warnings.filterwarnings('ignore')
 
-def main_SPA(main_data, test_data = False, time_series = False, interpretable = False, continuity = False, group_name = None, spectral_data = False,
-            plot_interrogation = False, enough_data = False, nested_cv = False, robust_priority = False, stability_info = False, dynamic_model = False, lag = 0,
-            alpha = 0.01, cat = None, xticks = None, yticks = None, model_name = None, cv_method = None):
+def main_SPA(main_data, test_data = False, interpretable = False, continuity = False, group_name = None, spectral_data = False,
+            plot_interrogation = False, enough_data = False, nested_cv = False, robust_priority = False, dynamic_model = False, lag = 0,
+            alpha = 0.01, cat = None, xticks = None, yticks = None, model_name = None, cv_method = None, K_fold = 5, Nr = 10, alpha_num = 20,
+            num_outer = 10, RNN_activation = 'relu'):
     """
     The main SPA function, which calls all other functions needed for model building.
 
@@ -29,8 +29,6 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
     test_data : string, optional, default = False
         The path to the file containing your test data.
         If False, TODO.
-    time_series : boolean, optional, default = False
-        Whether your data are time series data.
     interpretable : boolean, optional, default = False
         Whether you require your model to be interpretable.
     continuity : boolean, optional, default = False
@@ -53,13 +51,11 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
     robust_priority : boolean, optional, default = False
         Whether to prioritize robustness over accuracy.
         Relevant only when enough_data == False.
-    stability_info : boolean, optional, default = False
-        Whether you require model stability information given "enough time".
     dynamic_model : boolean, optional, default = False
         Whether to use a dynamic model.
     lag : integer, optional, default = 0
         The lag used when assessing nonlinear dynamics.
-        Relevant only when nonlinear == False and dynamic_model == True.
+        Relevant only when dynamic_model == True.
     alpha : float, optional, default = 0.01
         Significance level when doing statistical tests
     cat : list of int or None, optional, default = None
@@ -77,18 +73,27 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
         If None, SPA determines which models are viable based on the data.
     cv_method : str or None, optional, default = None
         Which cross validation method to use.
-        Valid choices are Single, KFold, MC, and Re_KFold.
+        Valid choices are Single, KFold, MC, or Re_KFold when dynamic_model == False,
+        and Single_ordered, Timeseries, AIC, AICc, or BIC when dynamic_model == True.
+    K_fold : int, optional, default = 5
+        Number of folds used in cross validation.
+    Nr : int, optional, default = 10
+        Number of CV repetitions used when cv_method in {'MC', 'Re_KFold', 'GroupShuffleSplit'}.
+    alpha_num : int, optional, default = 20
+        Penalty weight used when model_name in {'RR', 'EN', 'ALVEN', 'DALVEN'}.
+    num_outer : int, optional, default = 10
+        Number of outer loops used in nested CV.
+        Relevant only when nested_cv == True.
+    RNN_activation : str, optional, default = relu
+        The activation function used to build an RNN.
+        Must be in {relu, tanh, sigmoid, linear}
+        Relevant only when model_name == 'RNN'
     """
-    # Loading group names
+    # Loading group (the actual data) from group_name (a path)
     if group_name:
         group = load_file(group_name)
     else:
         group = None
-    # Dynamic models require time series data
-    if dynamic_model and not time_series:
-        warnings.warn('You did not declare your data as time series. Thus, only static models will be considered.')
-        dynamic_model = False
-    warnings.filterwarnings('ignore')
 
     # Loading the data
     Data = load_file(main_data)
@@ -139,7 +144,7 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
                     print('As you have enough data, do not require the model to be interpretable, and do not require continuity, ALVEN, SVR, and RF will be tested')
                     model_name.add('SVR')
                     model_name.add('RF')
-            # Nonlinear dynamic models
+            # Nonlinear, dynamic models
             elif not enough_data or interpretable:
                 print(f'As {"your data are limited"*(not enough_data)}{" and "*(not(enough_data) and interpretable)}{"you require an interpretable model"*interpretable}, DALVEN will be used.')
                 model_name = {'DALVEN'}
@@ -172,10 +177,10 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
             print(f'Single {"grouped CV "*bool(group_name)}{"validation "*(not bool(group_name))}will be used.') # Single grouped CV or single validation set
         elif group_name is None:
             cv_method = 'Re_KFold'
-            print(f'{"Nested "*(nested_cv and stability_info)}CV with repeated KFold in inner loop {"and one-std rule "*robust_priority}will be used.')
+            print(f'{"Nested "*nested_cv}CV with repeated KFold in inner loop {"and one-std rule "*robust_priority}will be used.')
         else:
             cv_method = 'GroupKFold'
-            print(f'{"Nested "*(nested_cv and stability_info)}GroupKFold {"with one-std rule "*robust_priority}will be used.')
+            print(f'{"Nested "*nested_cv}GroupKFold {"with one-std rule "*robust_priority}will be used.')
     # Dynamic models
     elif model_name == {'SS'}:
         print('MATLAB/ADAPTx packges with information criterion will be used.')
@@ -185,9 +190,12 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
     elif nested_cv:
         cv_method = 'Timeseries'
         print('Cross-validation for time series {"with one-std rule "*robust_priority}will be used.')
+    elif X_original.shape[0]//X_original.shape[1]<40:
+        cv_method = 'AICc'
+        print('AICc information criteria will be used.')
     else:
-        cv_method = 'IC'
-        print('Information criteria will be used.')
+        cv_method = 'AIC'
+        print('AIC information criteria will be used.')
 
     # Preprocessing the data
     round_number = 1
@@ -209,8 +217,8 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
     else:
         X_test = X
         y_test = y
-        X_test_scale =X_scale
-        y_test_scale =y_scale
+        X_test_scale = X_scale
+        y_test_scale = y_scale
 
     # Model fitting - 1st round
     fitting_result = {}
@@ -230,336 +238,74 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
             print('--------------Analysis Is Done--------------') 
         return fitting_result, selected_model
     elif not dynamic_model:
+        # Importing the correct CV settings based on robust_priority (one std rule)
         if not robust_priority:
             import cv_final as cv
-            K_fold = int(input('Number of K-fold you want to use, or the fold number you want to use in single validation 1/K, if not known input 5: '))
-            Nr = int(input('Number of repetition (if have in CV) you want to use, if not known input 10: '))     
-            alpha_num = int(input('Number of penalty weight you want to consider in RR/EN/ALVEN, if not known input 20: '))
-            
-            # Static / traditional CV
-            if not(nested_cv and stability_info):
-                val_err = np.zeros(len(model_name))
-                fitting1_result_trial = {}
-                
-                for index, model_index in enumerate(model_name):
-                    if model_index == 'ALVEN':
-                        model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, MSE_val, final_list = cv.CV_mse(model_index, X, y, X_test, y_test,
-                                cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num, label_name=True)
-                        fitting1_result_trial[model_index] = {'model_hyper':model_hyper,'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_test':mse_test,
-                                'yhat_train':yhat_train, 'yhat_test':yhat_test, 'MSE_val':MSE_val, 'final_list':final_list}
-                    elif model_index == 'SVR' or model_index == 'RF':
-                        model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, MSE_val = cv.CV_mse(model_index, X_scale, y_scale, X_test_scale, y_test_scale,
-                                cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num)
-                        fitting1_result_trial[model_index] = {'model_hyper':model_hyper,'final_model':final_model, 'mse_train':mse_train, 'mse_test':mse_test,
-                                'yhat_train':yhat_train, 'yhat_test':yhat_test, 'MSE_val':MSE_val}
-                    else:
-                        model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, MSE_val = cv.CV_mse(model_index, X_scale, y_scale, X_test_scale, y_test_scale,
-                                cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num)
-                        fitting1_result_trial[model_index] = {'model_hyper':model_hyper,'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_test':mse_test,
-                                'yhat_train':yhat_train, 'yhat_test':yhat_test, 'MSE_val': MSE_val}
-                    val_err[index] = MSE_val
-                    
-                selected_model = model_name[np.argmin(val_err)]
-                fitting_result[selected_model] = fitting1_result_trial[selected_model]
-                    
-                # Determing whether a dynamic model should have been used
-                yhat_test = scaler_y.inverse_transform(fitting_result[selected_model]['yhat_test'])
-                _, dynamic_model = residual_analysis(X_test, y_test, yhat_test, alpha = alpha, round_number = round_number)
-                if dynamic_model:
-                    print('A residual analysis found dynamics in the system. Please run SPA again with dynamic_model = True')
-                else:
-                    print('--------------Analysis Is Done--------------') 
-                return fitting_result, selected_model
-            # Nested CV
-            else: 
-                if group_name is None:
-                    num_outer = int(input('How many number of outer loop you want to use in Nested CV? if not known input 10: '))
-                    from sklearn.model_selection import train_test_split
-                    test_nest_err = np.zeros((len(model_name),num_outer))
-
-                    for index_out in range(num_outer):
-                        X_nest, X_nest_test, y_nest, y_nest_test = train_test_split(X, y, test_size=1/K_fold, random_state= index_out)
-                        X_nest_scale, X_nest_scale_test, y_nest_scale, y_nest_scale_test = train_test_split(X_scale, y_scale, test_size=1/K_fold, random_state= index_out)
-                        for index, model_index in enumerate(model_name):
-                            if model_index == 'ALVEN':
-                                model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, MSE_val, final_list = cv.CV_mse(model_index, X_nest, y_nest,
-                                        X_nest_test, y_nest_test, cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num, label_name=True)
-                            elif model_index == 'SVR' or model_index == 'RF':
-                                model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, MSE_val = cv.CV_mse(model_index, X_nest_scale, y_nest_scale, X_nest_scale_test,
-                                        y_nest_scale_test, cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num)
-                            else:
-                                model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, MSE_val = cv.CV_mse(model_index, X_nest_scale, y_nest_scale,
-                                        X_nest_scale_test, y_nest_scale_test, cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num)
-                            test_nest_err[index,index_out] = mse_test
-                else:
-                    from sklearn.model_selection import LeaveOneGroupOut
-                    test_nest_err = np.zeros((len(model_name), len(np.unique(group))))
-                    logo = LeaveOneGroupOut()
-
-                    for index_out, (train, test) in enumerate( logo.split(X, y.flatten(), groups=group.flatten()) ): # TODO: double-check train and test are right
-                        for index, model_index in enumerate(model_name):
-                            if model_index == 'ALVEN':
-                                model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, MSE_val, final_list = cv.CV_mse(model_index, X[train], y[train], X[test], y[test],
-                                        cv_type = cv_method, group = group[train], K_fold = K_fold, Nr= Nr, alpha_num=alpha_num, label_name=True)
-                            elif model_index == 'SVR' or model_index == 'RF':
-                                model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, MSE_val = cv.CV_mse(model_index, X_scale[train], y_scale[train], X_scale[test], y_scale[test],
-                                        cv_type = cv_method, group = group[train], K_fold = K_fold, Nr= Nr, alpha_num=alpha_num)
-                            else:
-                                model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, MSE_val = cv.CV_mse(model_index, X_scale[train], y_scale[train],
-                                        X_scale[test], y_scale[test], cv_type = cv_method, group = group[train], K_fold = K_fold, Nr= Nr, alpha_num=alpha_num)
-                            test_nest_err[index,index_out] = mse_test
-                        
-                # Nested CV MSE results
-                import matplotlib.pyplot as plt
-                plt.figure()
-                pos = [i+1 for i in range(len(model_name))]
-                ax=plt.subplot(111)
-                plt.violinplot(np.transpose(test_nest_err))
-                ax.set_xticks(pos)
-                ax.set_xticklabels(model_name)
-                ax.set_title('Testing MSE distribution using nested CV')
-
-                # Final model fitting
-                selected_model = model_name[np.argmin(np.mean(test_nest_err,axis=1))]
-                if selected_model == 'ALVEN':
-                    model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, MSE_val, final_list = cv.CV_mse(selected_model, X, y, X_test, y_test,
-                            cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num, label_name=True)
-                    fitting_result[selected_model] = {'model_hyper':model_hyper,'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_test':mse_test,
-                            'yhat_train':yhat_train, 'yhat_test':yhat_test, 'MSE_val':MSE_val, 'final_list':final_list}
-                elif selected_model == 'SVR' or selected_model == 'RF':
-                    model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, MSE_val = cv.CV_mse(selected_model, X_scale, y_scale, X_test_scale, y_test_scale,
-                            cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num)
-                    fitting_result[selected_model] = {'model_hyper':model_hyper,'final_model':final_model, 'mse_train':mse_train, 'mse_test':mse_test,
-                            'yhat_train':yhat_train, 'yhat_test':yhat_test, 'MSE_val':MSE_val}
-                else:
-                    model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, MSE_val = cv.CV_mse(selected_model, X_scale, y_scale, X_test_scale, y_test_scale,
-                            cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num)
-                    fitting_result[selected_model] = {'model_hyper':model_hyper,'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_test':mse_test,
-                            'yhat_train':yhat_train, 'yhat_test':yhat_test, 'MSE_val': MSE_val}
-                    
-                # Determing whether a dynamic model should have been used
-                yhat_test = scaler_y.inverse_transform(fitting_result[selected_model]['yhat_test'])
-                _, dynamic_model = residual_analysis(X_test, y_test, yhat_test, alpha = alpha, round_number = round_number)
-                if dynamic_model:
-                    print('A residual analysis found dynamics in the system. Please run SPA again with dynamic_model = True')
-                else:
-                    print('--------------Analysis Is Done--------------') 
-                return fitting_result, selected_model # TODO: stopped here
-        
         else:
-            #use static cross-validation for this round and traditional cv
-            import cv_final_onestd as cv_std
+            import cv_final_onestd as cv
+
+        # Static / traditional CV
+        if not nested_cv:
+            val_err = np.zeros(len(model_name))
+            temp_fitting_result = {}
             
-            K_fold = int(input('Number of K-fold you want to use, or the fold number you want to use in single validation 1/K, if not known input 5: '))
-            Nr = int(input('Number of repetition (if have in CV) you want to use, if not known input 10: '))     
-            alpha_num = int(input('Number of penalty weight you want to consider in RR/EN/ALVEN, if not known input 20: '))
-            
-            
-            if not(nested_cv and stability_info):
-                print('------Model Construction------')
-
-                val_err = np.zeros(len(model_name))
-                index = 0
-                fitting1_result_trial = {}
+            for index, model_index in enumerate(model_name):
+                temp_fitting_result[model_index], val_err[index] = run_cv_nondynamic(model_index, X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale, cv_method, group, K_fold, Nr, alpha_num)
                 
-                for model_index in model_name:
+            selected_model = model_name[np.argmin(val_err)]
+            fitting_result[selected_model] = temp_fitting_result[selected_model]
+        # Nested CV
+        else: 
+            if group_name is None:
+                from sklearn.model_selection import train_test_split
+                val_err = np.zeros((len(model_name),num_outer))
+
+                for index_out in range(num_outer):
+                    X_nest, X_nest_val, y_nest, y_nest_val = train_test_split(X, y, test_size=1/K_fold, random_state= index_out)
+                    X_nest_scale, X_nest_scale_val, y_nest_scale, y_nest_scale_val = train_test_split(X_scale, y_scale, test_size=1/K_fold, random_state= index_out)
+                    for index, model_index in enumerate(model_name):
+                        val_err[index,index_out] = run_cv_nondynamic(model_index, X_nest, y_nest, X_nest_scale, y_nest_scale, X_nest_val, y_nest_val, X_nest_scale_val,
+                                y_nest_scale_val, cv_method, group, K_fold, Nr, alpha_num, True)
+            else:
+                from sklearn.model_selection import LeaveOneGroupOut
+                val_err = np.zeros((len(model_name), len(np.unique(group))))
+                logo = LeaveOneGroupOut()
+
+                for index_out, (train, val) in enumerate( logo.split(X, y.flatten(), groups=group.flatten()) ): # TODO: double-check train and val are right
+                    for index, model_index in enumerate(model_name):
+                        val_err[index,index_out] = run_cv_nondynamic(model_index, X[train], y[train], X_scale[train], y_scale[train], X[val], y[val], X_scale[val], y_scale[val],
+                                cv_method, group[train], K_fold, Nr, alpha_num, True)
+                    
+            # Nested CV MSE results
+            import matplotlib.pyplot as plt
+            plt.figure()
+            pos = [i+1 for i in range(len(model_name))]
+            ax = plt.subplot(111)
+            plt.violinplot(np.transpose(val_err))
+            ax.set_xticks(pos)
+            ax.set_xticklabels(model_name)
+            ax.set_title('Testing MSE distribution using nested CV')
+
+            # Final model fitting
+            selected_model = model_name[np.argmin(np.mean(val_err,axis=1))]
+            fitting_result[selected_model], _ = run_cv_nondynamic(selected_model, X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale, cv_method, group, K_fold, Nr, alpha_num)
                 
-                    if model_index == 'ALVEN':
-                        model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, MSE_val, final_list = cv_std.CV_mse(model_index, X, y, X_test, y_test, cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num, label_name=True)
-                        fitting1_result_trial[model_index] = {'model_hyper':model_hyper,'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_test':mse_test, 'yhat_train':yhat_train, 'yhat_test':yhat_test, 'MSE_val':MSE_val, 'final_list':final_list}
-                        val_err[index] = MSE_val
-                        
-                    elif model_index == 'SVR' or model_index == 'RF':
-                        model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, MSE_val = cv_std.CV_mse(model_index, X_scale, y_scale, X_test_scale, y_test_scale, cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num)
-                        fitting1_result_trial[model_index] = {'model_hyper':model_hyper,'final_model':final_model, 'mse_train':mse_train, 'mse_test':mse_test, 'yhat_train':yhat_train, 'yhat_test':yhat_test, 'MSE_val':MSE_val}
-                        val_err[index] = MSE_val
-                    else:
-                        model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, MSE_val = cv_std.CV_mse(model_index, X_scale, y_scale, X_test_scale, y_test_scale, cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num)
-                        fitting1_result_trial[model_index] = {'model_hyper':model_hyper,'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_test':mse_test, 'yhat_train':yhat_train, 'yhat_test':yhat_test, 'MSE_val': MSE_val}
-                        val_err[index] = MSE_val
+        # Determing whether a dynamic model should have been used
+        yhat_test = scaler_y.inverse_transform(fitting_result[selected_model]['yhat_test'])
+        _, dynamic_model = residual_analysis(X_test, y_test, yhat_test, alpha = alpha, round_number = round_number)
+        if dynamic_model:
+            print('A residual analysis found dynamics in the system. Please run SPA again with dynamic_model = True')
+        else:
+            print('--------------Analysis Is Done--------------') 
+        return fitting_result, selected_model # TODO: stopped here
                     
-                    index += 1
-                    
-                if len(model_name) > 1: 
-                    print('Select the best model from the small candidate pool based on validation error:')
-                    selected_model = model_name[np.argmin(val_err)]
-                    print('*****'+selected_model + ' is selected.'+'*****')
-                else:
-                    selected_model = model_name[0]
-                
-                fitting_result[selected_model]=fitting1_result_trial[selected_model]
-                    
-                yhat_test = scaler_y.inverse_transform(fitting_result[selected_model]['yhat_test'])
-                _, dynamic_model = residual_analysis(X_test, y_test, yhat_test, alpha = alpha, round_number = round_number)
-                
-                print('The first round static fitting is done, check if nonlinear model is neccesarry')
-                if dynamic_model:
-                    print('There is significant dynamic in the residual, dyanmic model will be fitted in the 2nd round')
-                    round_number = 2
-                else:
-                    print('--------------Analysis Is Done--------------')
-
-
-            else: 
-                print('Nested CV is used and the model selection if necessary is based on testing set in the outer loop')
-                if group_name is None:
-                    num_outer = int(input('How many number of outer loop you want to use in Nested CV? if not known input 10: '))
-                    print('------Model Construction------')
-
-                    from sklearn.model_selection import train_test_split
-                                   
-                    test_nest_err = np.zeros((len(model_name),num_outer))
-
-                    for index_out in range(num_outer):
-                        X_nest, X_nest_test, y_nest, y_nest_test = train_test_split(X, y, test_size=1/K_fold, random_state= index_out)
-                        X_nest_scale, X_nest_scale_test, y_nest_scale, y_nest_scale_test = train_test_split(X_scale, y_scale, test_size=1/K_fold, random_state= index_out)
-
-                        index = 0
-                        for model_index in model_name:
-            
-                            if model_index == 'ALVEN':
-                                model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, MSE_val, final_list = cv_std.CV_mse(model_index, X_nest, y_nest, X_nest_test, y_nest_test, cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num, label_name=True)
-                                test_nest_err[index,index_out] = mse_test
-                            
-                            elif model_index == 'SVR' or model_index == 'RF':
-                                model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, MSE_val = cv_std.CV_mse(model_index, X_nest_scale, y_nest_scale, X_nest_scale_test, y_nest_scale_test, cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num)
-                                test_nest_err[index,index_out] = mse_test
-                            else:
-                                model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, MSE_val = cv_std.CV_mse(model_index, X_nest_scale, y_nest_scale, X_nest_scale_test, y_nest_scale_test, cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num)
-                                test_nest_err[index,index_out] = mse_test
-                        
-                            index += 1
-                            
-                    print('The nested CV testing MSE result:')
-                    import matplotlib.pyplot as plt
-                    plt.figure()
-                    pos = [i+1 for i in range(len(model_name))]
-                    ax=plt.subplot(111)
-                    plt.violinplot(np.transpose(test_nest_err))
-                    ax.set_xticks(pos)
-                    ax.set_xticklabels(model_name)
-                    ax.set_title('Testing MSE distribution using nested CV')
-
-                            
-                    if len(model_name) > 1: 
-                        print('Select the best model from the small candidate pool based on nested test error:')
-                        selected_model = model_name[np.argmin(np.mean(test_nest_err,axis=1))]
-                        print('*****'+selected_model + ' is selected.*****')
-                        
-                    else:
-                        selected_model = model_name[0]
-
-                    print('Final model fitting')
-
-                    if selected_model == 'ALVEN':
-                        model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, MSE_val, final_list = cv_std.CV_mse(selected_model, X, y, X_test, y_test, cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num, label_name=True)
-                        fitting_result[selected_model] = {'model_hyper':model_hyper,'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_test':mse_test, 'yhat_train':yhat_train, 'yhat_test':yhat_test, 'MSE_val':MSE_val, 'final_list':final_list}
-                            
-                    elif selected_model == 'SVR' or selected_model == 'RF':
-                        model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, MSE_val = cv_std.CV_mse(selected_model, X_scale, y_scale, X_test_scale, y_test_scale, cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num)
-                        fitting_result[selected_model] = {'model_hyper':model_hyper,'final_model':final_model, 'mse_train':mse_train, 'mse_test':mse_test, 'yhat_train':yhat_train, 'yhat_test':yhat_test, 'MSE_val':MSE_val}
-                    else:
-                        model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, MSE_val = cv_std.CV_mse(selected_model, X_scale, y_scale, X_test_scale, y_test_scale, cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num)
-                        fitting_result[selected_model] = {'model_hyper':model_hyper,'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_test':mse_test, 'yhat_train':yhat_train, 'yhat_test':yhat_test, 'MSE_val': MSE_val}
-                        
-                    yhat_test = scaler_y.inverse_transform(yhat_test)
-                    _, dynamic_model = residual_analysis(X_test, y_test, yhat_test, alpha = alpha, round_number = round_number)
-                        
-                    print('The first round static fitting is done, check if nonlinear model is neccesarry')
-                    if dynamic_model:
-                        print('There is significant dynamic in the residual, dyanmic model will be fitted in the 2nd round')
-                        round_number = 2
-                    else:
-                        print('--------------Analysis Is Done--------------')
-                     
-
-                
-                else:
-                    from sklearn.model_selection import LeaveOneGroupOut
-                    print('Leave one group out will be used in the outer loop')
-                    
-                    print('------Model Construction------')
-
-                    test_nest_err = np.zeros((len(model_name), len(np.unique(group))))
-                    logo = LeaveOneGroupOut()
-
-                    index_out = 0
-                    for train, test in logo.split(X, y.flatten(), groups=group.flatten()):
-                        
-                        index = 0
-                        for model_index in model_name:
-            
-                            if model_index == 'ALVEN':
-                                model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, MSE_val, final_list = cv_std.CV_mse(model_index, X[train], y[train], X[test], y[test], cv_type = cv_method, group = group[train], K_fold = K_fold, Nr= Nr, alpha_num=alpha_num, label_name=True)
-                                test_nest_err[index,index_out] = mse_test
-                            
-                            elif model_index == 'SVR' or model_index == 'RF':
-                                model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, MSE_val = cv_std.CV_mse(model_index, X_scale[train], y_scale[train], X_scale[test], y_scale[test], cv_type = cv_method, group = group[train], K_fold = K_fold, Nr= Nr, alpha_num=alpha_num)
-                                test_nest_err[index,index_out] = mse_test
-                            else:
-                                model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, MSE_val = cv_std.CV_mse(model_index, X_scale[train], y_scale[train], X_scale[test], y_scale[test], cv_type = cv_method, group = group[train], K_fold = K_fold, Nr= Nr, alpha_num=alpha_num)
-                                test_nest_err[index,index_out] = mse_test
-                        
-                            index += 1
-                        index_out +=1 
-                        
-                        
-                    print('The nested CV testing MSE result:')
-                    import matplotlib.pyplot as plt
-                    plt.figure()
-                    pos = [i+1 for i in range(len(model_name))]
-                    ax=plt.subplot(111)
-                    plt.violinplot(np.transpose(test_nest_err))
-                    ax.set_xticks(pos)
-                    ax.set_xticklabels(model_name)
-                    ax.set_title('Testing MSE distribution using nested CV')
-
-                            
-                    if len(model_name) > 1: 
-                        print('Select the best model from the small candidate pool based on nested test error:')
-                        selected_model = model_name[np.argmin(np.mean(test_nest_err,axis=1))]
-                        print('*****'+selected_model + ' is selected.*****')
-
-                        
-                    else:
-                        selected_model = model_name[0]
-
-
-                    print('------Final model fitting-------')
-
-                    if selected_model == 'ALVEN':
-                        model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, MSE_val, final_list = cv_std.CV_mse(selected_model, X, y, X_test, y_test, cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num, label_name=True)
-                        fitting_result[selected_model] = {'model_hyper':model_hyper,'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_test':mse_test, 'yhat_train':yhat_train, 'yhat_test':yhat_test, 'MSE_val':MSE_val, 'final_list':final_list}
-                            
-                    elif selected_model == 'SVR' or selected_model == 'RF':
-                        model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, MSE_val = cv_std.CV_mse(selected_model, X_scale, y_scale, X_test_scale, y_test_scale, cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num)
-                        fitting_result[selected_model] = {'model_hyper':model_hyper,'final_model':final_model, 'mse_train':mse_train, 'mse_test':mse_test, 'yhat_train':yhat_train, 'yhat_test':yhat_test, 'MSE_val':MSE_val}
-                    else:
-                        model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, MSE_val = cv_std.CV_mse(selected_model, X_scale, y_scale, X_test_scale, y_test_scale, cv_type = cv_method, group = group, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num)
-                        fitting_result[selected_model] = {'model_hyper':model_hyper,'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_test':mse_test, 'yhat_train':yhat_train, 'yhat_test':yhat_test, 'MSE_val': MSE_val}
-                        
-                    yhat_test = scaler_y.inverse_transform(yhat_test)
-                    _, dynamic_model = residual_analysis(X_test, y_test, yhat_test, alpha = alpha, round_number = round_number)
-                        
-
-                    print('The first round static fitting is done, check if nonlinear model is neccesarry')
-                    if dynamic_model:
-                        print('There is significant dynamic in the residual, dyanmic model will be fitted in the 2nd round')
-                        round_number = 2
-                    else:
-                        print('--------------Analysis Is Done--------------')
-                    
-    else:  #use dynamic model in the first round
+    else: # Dynamic model
         steps = int(input('Number of steps you want to test for the future prediction? '))
-        
-        if nonlinear == 1:
-
-            if model_name == ['RNN']:
+        if nonlinear:
+            if model_name == {'RNN'}:
                 selected_model = 'RNN'
                 import timeseries_regression_RNN as t_RNN
                 
-                print('Please input the following numbers/types from the smallest to the largest: 1 3 5 or linear relu')
-                activation = list(map(str,input("Types of activation function you want to use (e.g. linear, relu, tanh?): ").strip().split()))
                 num_layers = list(map(int,input("Numbers of layers you want to test: ").strip().split()))
                 state_size = list(map(int,input("Numbers of states you want to test: ").strip().split()))
                 cell_type = list(map(str,input("Types of cells you want to use (e.g. regular, LSTM, GRU?): ").strip().split()))
@@ -577,54 +323,29 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
                 lambda_l2_reg = float(input('Penalty weight of L2 norm? '))
                 num_epochs = float(input('Maximum number of epochs? ' ))
                     
-                if cv_method == 'IC':
+                if 'IC' in cv_method:
                     import IC
-
-                    if robust_priority:
-                        print('BIC is recommended to prefer a simplier model for robustness.')
-                        
-                    IC_method = input('The type of information criterion you want to use (AIC, AICc, BIC), if not known type None, the criterion will be selected between AIC/AICc. ')
-                    if IC_method == 'None':
-                        IC_method = None
-                        
-        
-                    print('------Model Construction------')
-        
-                    RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN= IC.IC_mse('RNN', X_scale, y_scale, X_test_scale, y_test_scale, cv_type = IC_method, cell_type = cell_type,\
-                                                                                                                                            activation = activation, num_layers=num_layers,state_size=state_size,num_steps=num_steps, \
-                                                                                                                                            batch_size=batch_size,epoch_overlap= epoch_overlap, learning_rate=learning_rate, lambda_l2_reg=lambda_l2_reg,\
-                                                                                                                                            num_epochs=num_epochs, max_checks_without_progress = max_checks_without_progress,round_number = str(round_number))
-                    
-                    
-
+                    if robust_priority and cv_method != 'BIC':
+                        print(f'Note: BIC is recommended for robustness, but you selected {cv_method}.')
+                    RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN = IC.IC_mse('RNN', X_scale,
+                            y_scale, X_test_scale, y_test_scale, cv_type = cv_method, cell_type = cell_type, activation = activation, num_layers = num_layers,
+                            state_size = state_size, num_steps = num_steps, batch_size = batch_size, epoch_overlap = epoch_overlap, learning_rate = learning_rate,
+                            lambda_l2_reg = lambda_l2_reg, num_epochs = num_epochs, max_checks_without_progress = max_checks_without_progress, round_number = 1)
+                elif not robust_priority:
+                    import cv_final as cv
+                    RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN = cv.CV_mse('RNN', X_scale,
+                            y_scale, X_test_scale, y_test_scale, cv_type = cv_method, K_fold = K_fold, Nr = Nr, cell_type = cell_type, group = group, activation = activation, num_layers = num_layers,
+                            state_size = state_size,num_steps = num_steps, batch_size = batch_size, epoch_overlap = epoch_overlap, learning_rate = learning_rate,
+                            lambda_l2_reg = lambda_l2_reg, num_epochs = num_epochs, max_checks_without_progress = max_checks_without_progress, round_number = str(round_number))
                 else:
-                    K_fold = int(input('Number of K-fold you want to use, or the fold number you want to use in single validation 1/K, if not known input 5: '))
-                    Nr = int(input('Number of repetition (if have in CV) you want to use, if not known input 10: '))     
-                    
-                    print('------Model Construction------')
-
-                    if not robust_priority:
-                        
-                        import cv_final as cv
-            
-                        RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN= cv.CV_mse('RNN', X_scale, y_scale, X_test_scale, y_test_scale, cv_type = cv_method, K_fold = K_fold, Nr= Nr, cell_type = cell_type,group=group,\
-                                                                                                                                                activation = activation, num_layers=num_layers,state_size=state_size,num_steps=num_steps, \
-                                                                                                                                                batch_size=batch_size,epoch_overlap= epoch_overlap, learning_rate=learning_rate, lambda_l2_reg=lambda_l2_reg,\
-                                                                                                                                                num_epochs=num_epochs, max_checks_without_progress = max_checks_without_progress,round_number = str(round_number))
-                    else:
-                        import cv_final_onestd as cv_std    
-                        print('CV with ons-std rule is used for RNN model')
-
-            
-                        RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN= cv_std.CV_mse('RNN', X_scale, y_scale, X_test_scale, y_test_scale, cv_type = cv_method, K_fold = K_fold, Nr= Nr, cell_type = cell_type,group=group,\
-                                                                                                                                                activation = activation, num_layers=num_layers,state_size=state_size,num_steps=num_steps, \
-                                                                                                                                                batch_size=batch_size,epoch_overlap= epoch_overlap, learning_rate=learning_rate, lambda_l2_reg=lambda_l2_reg,\
-                                                                                                                                                num_epochs=num_epochs, max_checks_without_progress = max_checks_without_progress,round_number = str(round_number))
-                   
-                        
+                    import cv_final_onestd as cv
+                    RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN = cv.CV_mse('RNN', X_scale,
+                            y_scale, X_test_scale, y_test_scale, cv_type = cv_method, K_fold = K_fold, Nr = Nr, cell_type = cell_type, group = group, activation = activation, num_layers = num_layers,
+                            state_size = state_size,num_steps = num_steps, batch_size = batch_size, epoch_overlap = epoch_overlap, learning_rate = learning_rate,
+                            lambda_l2_reg = lambda_l2_reg, num_epochs = num_epochs, max_checks_without_progress = max_checks_without_progress, round_number = str(round_number))
                         
                 #k-step prediction
-                num_train=round(X.shape[0]*RNN_hyper['early_stop']['train_ratio'])
+                num_train = round(X.shape[0]*RNN_hyper['early_stop']['train_ratio'])
                 
                 print('K-step prediction for training')
                 train_y_prediction_kstep, train_loss_kstep = t_RNN.timeseries_RNN_feedback_test(X_scale[:num_train], y_scale[:num_train], X_scale[:num_train],y_scale[:num_train], kstep = steps, cell_type=RNN_hyper['cell_type'],activation = RNN_hyper['activation'], state_size = RNN_hyper['state_size'],\
@@ -653,7 +374,6 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
                 import regression_models as rm
                 
                 alpha_num = int(input('Number of penalty weight you want to consider in DALVEN, if not known input 20: '))
-                lag = list(map(int,input("Lists of numbers of lags you want to consider in DALVEN: (e.g. 1 2 3) ").strip().split()))
                 degree = list(map(int,input("Orders of nonlinear mapping considered in DALVEN: (choose to include 1 2 3) ").strip().split()))
 
                 if int(input('Do you want to test both DALVEN-full/DALVEN? (Yes: 1, No: 0): ')):
@@ -675,9 +395,6 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
                         if not robust_priority:
                             import cv_final as cv
         
-                            K_fold = int(input('Number of K-fold you want to use, or the fold number you want to use in single validation 1/K, if not known input 5: '))
-                            Nr = int(input('Number of repetition (if have in CV) you want to use, if not known input 10: '))     
-
                             print('------Model Construction------')
 
          
@@ -691,9 +408,6 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
                             print('CV with ons-std rule is used for DALVEN model')
                             import cv_final_onestd as cv_std    
                             
-                            K_fold = int(input('Number of K-fold you want to use, or the fold number you want to use in single validation 1/K, if not known input 5: '))
-                            Nr = int(input('Number of repetition (if have in CV) you want to use, if not known input 10: '))     
-
                             print('------Model Construction------')
          
                             DALVEN_hyper,DALVEN_model, DALVEN_params, mse_train_DALVEN, mse_test_DALVEN, yhat_train_DALVEN, yhat_test_DALVEN, MSE_v_DALVEN, final_list = cv_std.CV_mse('DALVEN', X, y, X_test, y_test, cv_type = cv_method, K_fold = K_fold, Nr= Nr, \
@@ -771,9 +485,6 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
                         
                     else:
                         #using validation set
-                        K_fold = int(input('Number of K-fold you want to use, or the fold number you want to use in single validation 1/K, if not known input 5: '))
-                        Nr = int(input('Number of repetition (if have in CV) you want to use, if not known input 10: '))     
-
                         print('------Model Construction------')
                         
                         if not robust_priority:
@@ -1006,9 +717,6 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
                     
 
                 else:
-                    K_fold = int(input('Number of K-fold you want to use, or the fold number you want to use in single validation 1/K, if not known input 5: '))
-                    Nr = int(input('Number of repetition (if have in CV) you want to use, if not known input 10: '))     
-                    
                     print('------Model Construction------')
 
                     if not robust_priority:
@@ -1059,7 +767,6 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
                 import regression_models as rm
 
                 alpha_num = int(input('Number of penalty weight you want to consider in DALVEN, if not known input 20: '))
-                lag = list(map(int,input("Lists of numbers of lags you want to consider in DALVEN: (e.g. 1 2 3) ").strip().split()))
                 degree = list(map(int,input("Orders of nonlinear mapping considered in DALVEN: (choose to include 1 2 3) ").strip().split()))
 
                 if int(input('Do you want to test both DALVEN-full/DALVEN? (Yes: 1, No: 0): ')):
@@ -1081,9 +788,6 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
                         if not robust_priority:
                             import cv_final as cv
         
-                            K_fold = int(input('Number of K-fold you want to use, or the fold number you want to use in single validation 1/K, if not known input 5: '))
-                            Nr = int(input('Number of repetition (if have in CV) you want to use, if not known input 10: '))     
-
                             print('------Model Construction------')
 
          
@@ -1097,9 +801,6 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
                             print('CV with ons-std rule is used for DALVEN model')
                             import cv_final_onestd as cv_std    
                             
-                            K_fold = int(input('Number of K-fold you want to use, or the fold number you want to use in single validation 1/K, if not known input 5: '))
-                            Nr = int(input('Number of repetition (if have in CV) you want to use, if not known input 10: '))     
-
                             print('------Model Construction------')
          
                             DALVEN_hyper,DALVEN_model, DALVEN_params, mse_train_DALVEN, mse_test_DALVEN, yhat_train_DALVEN, yhat_test_DALVEN, MSE_v_DALVEN, final_list = cv_std.CV_mse('DALVEN', X, y, X_test, y_test, cv_type = cv_method, K_fold = K_fold, Nr= Nr, \
@@ -1161,8 +862,6 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
                                 final_list = IC.IC_mse(DALVEN_method, X, y, X_test, y_test, cv_type = IC_method, alpha_num=alpha_num, lag=lag, degree=degree, label_name=True, trans_type= 'auto')
                     else:
                         # Using validation set
-                        K_fold = int(input('Number of K-fold you want to use, or the fold number you want to use in single validation 1/K, if not known input 5: '))
-                        Nr = int(input('Number of repetition (if have in CV) you want to use, if not known input 10: '))     
                         print('------Model Construction------')
                         if not robust_priority:
                             import cv_final as cv
@@ -1260,6 +959,9 @@ def main_SPA(main_data, test_data = False, time_series = False, interpretable = 
                     print('--------------Analysis Is Done--------------')
 
 def load_file(filename):
+    """
+    Used by SPA to load datafiles
+    """
     _, ext = splitext(filename)
     if ext == '.txt': # Assume is separated by space
         my_file = read_csv(filename, header = None, sep = ' ').values
@@ -1277,4 +979,53 @@ def load_file(filename):
     else:
         raise ValueError(f'Please provide a filename with extension in {.txt, .csv, .tsv, .xls, .xlsx}. You passed {filename}')
     return my_file
+
+def run_cv_nondynamic(model_index, X_train, y_train, X_train_scaled, y_train_scaled, X_test, y_test, X_test_scaled, y_test_scaled,
+                        cv_method, group, K_fold, Nr, alpha_num, for_validation = False):
+    """
+    Runs a nondynamic model for CV or final-run purposes. Automatically called by SPA.
+
+    Parameters
+    ----------
+    model_index to alpha_num
+        Automatically called by SPA
+    for_validation : bool, optional, default = False
+        Whether the run is done for validation (to determine the best model),
+        or for testing of the model.
+        This changes a little the syntax and values returned, but not the logic.
+    """
+    if for_validation:
+        # For the sake of clarity
+        X_val = X_test
+        y_val = y_test
+        X_val_scaled = X_test_scaled
+        y_val_scaled = y_val_scaled
+
+        if model_index == 'ALVEN':
+            _, _, _, _, mse_val, _, _, _, _ = cv.CV_mse(model_index, X_train, y_train, X_val, y_val,
+                    cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr, alpha_num = alpha_num, label_name = True)
+        elif model_index == 'SVR' or model_index == 'RF':
+            _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled,
+                    cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr, alpha_num = alpha_num)
+        else:
+            _, _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled,
+                    X_val_scaled, y_val_scaled, cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr, alpha_num = alpha_num)
+        return mse_val
+    else:
+        if model_index == 'ALVEN':
+            model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, mse_val, final_list = cv.CV_mse(model_index, X_train, y_train, X_test, y_test,
+                    cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr, alpha_num = alpha_num, label_name = True)
+            fitting_result = {'model_hyper':model_hyper,'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_test':mse_test,
+                    'yhat_train':yhat_train, 'yhat_test':yhat_test, 'mse_val':mse_val, 'final_list':final_list}
+        elif model_index == 'SVR' or model_index == 'RF':
+            model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled, y_test_scaled,
+                    cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr, alpha_num = alpha_num)
+            fitting_result = {'model_hyper':model_hyper,'final_model':final_model, 'mse_train':mse_train, 'mse_test':mse_test,
+                    'yhat_train':yhat_train, 'yhat_test':yhat_test, 'mse_val':mse_val}
+        else:
+            model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled, y_test_scaled,
+                    cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr, alpha_num = alpha_num)
+            fitting_result = {'model_hyper':model_hyper,'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_test':mse_test,
+                    'yhat_train':yhat_train, 'yhat_test':yhat_test, 'mse_val': mse_val}
+        return fitting_result, mse_val
 
