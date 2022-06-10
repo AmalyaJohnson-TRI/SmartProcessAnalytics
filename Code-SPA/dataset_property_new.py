@@ -24,7 +24,7 @@ import matplotlib.style
 import matplotlib as mpl
 mpl.style.use('default')
 
-def nonlinearity_assess(X, y, plot, cat=None, alpha = 0.01, difference = 0.4, xticks = None, yticks = None, round_number = 0):
+def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference = 0.4, xticks = None, yticks = None, round_number = 0):
     """
     This function assesses the nonlinear correlation between X[:] and y
     
@@ -218,7 +218,7 @@ def nonlinearity_assess(X, y, plot, cat=None, alpha = 0.01, difference = 0.4, xt
         overall_result = np.concatenate((corr_difference, q_test), axis=0) # overall result
         return int(True in overall_result)
 
-def collinearity_assess(X, y, plot, xticks = None , yticks = None, round_number = 0):
+def collinearity_assess(X, y, plot = True, xticks = None , yticks = None, round_number = 0):
     """
     This funcion assesses collinearity in the independent variables, using the variation inflation factor
     Rule of thumb: if VIF > 5, then the explanatory variable is highly collinear with other
@@ -266,7 +266,7 @@ def collinearity_assess(X, y, plot, xticks = None , yticks = None, round_number 
                 return int(True)
         return int(False)
         
-def dynamic_assess(x, plot=1, y = None, round_number = 0, alpha = 0.01, freq = 1):
+def dynamic_assess(x, plot = True, y = None, round_number = 0, alpha = 0.01, freq = 1):
     """
     x: time series data of interests of size Nx1
     y: another time series for calculating corss-correlation of size Nx1
@@ -297,7 +297,7 @@ def dynamic_assess(x, plot=1, y = None, round_number = 0, alpha = 0.01, freq = 1
     pacf_lag = [i for i,u in enumerate(pacf) if abs(u)>1.96/np.sqrt(x.shape[0])]
    
     # CCF
-    if y is not None:
+    if y is not None and plot:
         plt.figure(figsize=(5,3))
         plt.xcorr(x,y, normed = True, usevlines=True, maxlags=20)
         plt.axhline(y=2.575*1/np.sqrt(x.shape[0]), color='blue', linestyle='--',alpha=0.9) # 99% confidence interval
@@ -310,7 +310,7 @@ def dynamic_assess(x, plot=1, y = None, round_number = 0, alpha = 0.01, freq = 1
         plt.savefig('CCF_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
     
     # FFT
-    x=x.squeeze()
+    x = x.squeeze()
     if x.shape[0] % 2 != 0:
         x = x[:-1]
     L = x.shape[0]
@@ -320,17 +320,18 @@ def dynamic_assess(x, plot=1, y = None, round_number = 0, alpha = 0.01, freq = 1
     P11 = P1[:]
     P1[1:-1] = 2*P11[1:-1]
     f = freq*np.linspace(0, int(L/2), num=int(L/2)+1,endpoint = True)/ L
-    plt.figure(figsize=(5,3))
-    plt.plot(f,P1)
-    font = 15
-    plt.title('Single-sided amplitude spectrum',fontsize = font)
-    plt.xlabel('frequncy (Hz)', fontsize = font)
-    plt.ylabel('|P1(f)|', fontsize = font)
-    plt.tight_layout()
-    plt.savefig('FFT_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')  
+    if plot:
+        plt.figure(figsize=(5,3))
+        plt.plot(f,P1)
+        font = 15
+        plt.title('Single-sided amplitude spectrum',fontsize = font)
+        plt.xlabel('frequncy (Hz)', fontsize = font)
+        plt.ylabel('|P1(f)|', fontsize = font)
+        plt.tight_layout()
+        plt.savefig('FFT_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')  
     return (acf_lag, pacf_lag)
   
-def residual_analysis(X, y, y_hat, nlag = None, alpha = 0.01, round_number = 0, log_transform = False):
+def residual_analysis(X, y, y_hat, plot = True, nlag = None, alpha = 0.01, round_number = 0, log_transform = False):
     """
     This funcion assesses the residuals (heteroscedasticity and dyanmics)
     Heteroscedasticity is tested on Breusch-Pagan Test and White Test
@@ -368,51 +369,52 @@ def residual_analysis(X, y, y_hat, nlag = None, alpha = 0.01, round_number = 0, 
             nlag = y.shape[0]//4
             
     # Basic Residual Plot
-    fig, ax = plt.subplots(1,1,figsize=(4,3))
-    plt.plot(y,y_hat,'*')
-    sm.qqline(ax=ax, line='45', fmt='k--')
-    plt.ylabel('fitted y', fontsize=14)
-    plt.xlabel('y', fontsize=14)
-    plt.axis('scaled')
-    plt.tight_layout()
-    plt.title('Real vs Fitted')
-    plt.savefig('Fit_plot_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
+    if plot:
+        fig, ax = plt.subplots(1,1,figsize=(4,3))
+        plt.plot(y,y_hat,'*')
+        sm.qqline(ax=ax, line='45', fmt='k--')
+        plt.ylabel('fitted y', fontsize=14)
+        plt.xlabel('y', fontsize=14)
+        plt.axis('scaled')
+        plt.tight_layout()
+        plt.title('Real vs Fitted')
+        plt.savefig('Fit_plot_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
 
-    fontsize = 20
-    markersize = 8
-    sample_number = np.linspace(1, residual.shape[0], residual.shape[0], endpoint=True)
-    fig, axs = plt.subplots(2, 2, figsize=(12,9))
-    axs[0,0].hist(residual, density = True, facecolor='skyblue', alpha=1, edgecolor='black')
-    axs[0,0].axvline(x=0, color='k', linestyle='--',alpha=0.6)
-    axs[0,0].set_ylabel('Frequency',fontsize = fontsize)
-    axs[0,0].set_xlabel('Residual',fontsize = fontsize)
-    axs[0,0].set_title('Residual histogram',fontsize = fontsize)
-    axs[0,0].tick_params(labelsize = fontsize-3)
-       
-    axs[0,1].plot(sample_number, residual, 'o', color = 'cornflowerblue', markersize = markersize)
-    axs[0,1].axhline(y=0, color='k', linestyle='--',alpha=0.6)
-    axs[0,1].set_xlabel('Sample number',fontsize = fontsize)
-    axs[0,1].set_ylabel('Residual',fontsize = fontsize)
-    axs[0,1].set_title('Residual',fontsize = fontsize)
-    axs[0,1].tick_params(labelsize = fontsize-3)
+        fontsize = 20
+        markersize = 8
+        sample_number = np.linspace(1, residual.shape[0], residual.shape[0], endpoint=True)
+        fig, axs = plt.subplots(2, 2, figsize=(12,9))
+        axs[0,0].hist(residual, density = True, facecolor='skyblue', alpha=1, edgecolor='black')
+        axs[0,0].axvline(x=0, color='k', linestyle='--',alpha=0.6)
+        axs[0,0].set_ylabel('Frequency',fontsize = fontsize)
+        axs[0,0].set_xlabel('Residual',fontsize = fontsize)
+        axs[0,0].set_title('Residual histogram',fontsize = fontsize)
+        axs[0,0].tick_params(labelsize = fontsize-3)
+           
+        axs[0,1].plot(sample_number, residual, 'o', color = 'cornflowerblue', markersize = markersize)
+        axs[0,1].axhline(y=0, color='k', linestyle='--',alpha=0.6)
+        axs[0,1].set_xlabel('Sample number',fontsize = fontsize)
+        axs[0,1].set_ylabel('Residual',fontsize = fontsize)
+        axs[0,1].set_title('Residual',fontsize = fontsize)
+        axs[0,1].tick_params(labelsize = fontsize-3)
 
-    sm.qqplot(residual.squeeze(), stats.t, fit=True,ax=axs[1,0])
-    sm.qqline(ax=axs[1,0], line='45', fmt='k--')
-    axs[1,0].set_xlabel('Theoretical quantiles',fontsize = fontsize)
-    axs[1,0].set_ylabel('Sample quantiles',fontsize = fontsize)
-    axs[1,0].set_title('Normal Q-Q plot',fontsize = fontsize)
-    axs[1,0].tick_params(labelsize = fontsize-3)
-    axs[1,0].get_lines()[0].set_markersize(markersize)
-    axs[1,0].get_lines()[0].set_markerfacecolor('cornflowerblue')
-    
-    axs[1,1].plot(y_hat, residual, 'o', color = 'cornflowerblue', markersize = markersize)
-    axs[1,1].axhline(y=0, color='k', linestyle='--',alpha=0.6)
-    axs[1,1].set_xlabel('Fitted response',fontsize = fontsize)
-    axs[1,1].set_ylabel('Residual',fontsize = fontsize)
-    axs[1,1].set_title('Residual versus fitted response',fontsize = fontsize)
-    axs[1,1].tick_params(labelsize = fontsize-3)
-    plt.tight_layout()
-    plt.savefig('Residual_plot_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
+        sm.qqplot(residual.squeeze(), stats.t, fit=True,ax=axs[1,0])
+        sm.qqline(ax=axs[1,0], line='45', fmt='k--')
+        axs[1,0].set_xlabel('Theoretical quantiles',fontsize = fontsize)
+        axs[1,0].set_ylabel('Sample quantiles',fontsize = fontsize)
+        axs[1,0].set_title('Normal Q-Q plot',fontsize = fontsize)
+        axs[1,0].tick_params(labelsize = fontsize-3)
+        axs[1,0].get_lines()[0].set_markersize(markersize)
+        axs[1,0].get_lines()[0].set_markerfacecolor('cornflowerblue')
+        
+        axs[1,1].plot(y_hat, residual, 'o', color = 'cornflowerblue', markersize = markersize)
+        axs[1,1].axhline(y=0, color='k', linestyle='--',alpha=0.6)
+        axs[1,1].set_xlabel('Fitted response',fontsize = fontsize)
+        axs[1,1].set_ylabel('Residual',fontsize = fontsize)
+        axs[1,1].set_title('Residual versus fitted response',fontsize = fontsize)
+        axs[1,1].tick_params(labelsize = fontsize-3)
+        plt.tight_layout()
+        plt.savefig('Residual_plot_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
 
     # Heteroscedaticity
     # Test whether variance is the same in 2 subsamples
@@ -429,24 +431,25 @@ def residual_analysis(X, y, y_hat, nlag = None, alpha = 0.01, round_number = 0, 
     # TODO: shouldn't we have some sort of correction (Bonferroni, etc.) because we're doing 3 tests?
 
     # Dynamics
-    # Autocorrelation
-    fig = plt.figure(figsize=(5,3))
-    ax1 = fig.add_subplot(111)    
-    fig = sm.graphics.tsa.plot_acf(residual, lags=nlag, ax=ax1, alpha= alpha)
-    for item in ([ax1.title, ax1.xaxis.label, ax1.yaxis.label] + ax1.get_xticklabels() + ax1.get_yticklabels()):
-        item.set_fontsize(14)
-    ax1.set_xlabel('Lag')
-    plt.tight_layout()
-    plt.savefig('ACF_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
-    # Partial autocorrelation
-    fig = plt.figure(figsize=(5,3))
-    ax2 = fig.add_subplot(111)    
-    fig = sm.graphics.tsa.plot_pacf(residual, lags=nlag, ax=ax2, alpha= alpha)
-    for item in ([ax2.title, ax2.xaxis.label, ax2.yaxis.label] + ax2.get_xticklabels() + ax2.get_yticklabels()):
-        item.set_fontsize(14)
-    ax2.set_xlabel('Lag')
-    plt.tight_layout()
-    plt.savefig('PACF_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
+    if plot:
+        # Autocorrelation
+        fig = plt.figure(figsize=(5,3))
+        ax1 = fig.add_subplot(111)    
+        fig = sm.graphics.tsa.plot_acf(residual, lags=nlag, ax=ax1, alpha= alpha)
+        for item in ([ax1.title, ax1.xaxis.label, ax1.yaxis.label] + ax1.get_xticklabels() + ax1.get_yticklabels()):
+            item.set_fontsize(14)
+        ax1.set_xlabel('Lag')
+        plt.tight_layout()
+        plt.savefig('ACF_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
+        # Partial autocorrelation
+        fig = plt.figure(figsize=(5,3))
+        ax2 = fig.add_subplot(111)    
+        fig = sm.graphics.tsa.plot_pacf(residual, lags=nlag, ax=ax2, alpha= alpha)
+        for item in ([ax2.title, ax2.xaxis.label, ax2.yaxis.label] + ax2.get_xticklabels() + ax2.get_yticklabels()):
+            item.set_fontsize(14)
+        ax2.set_xlabel('Lag')
+        plt.tight_layout()
+        plt.savefig('PACF_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
     # ACF
     [acf, confint, qstat, acf_pvalues] = sm.tsa.stattools.acf(residual, nlags=nlag,qstat = True, alpha = alpha)
     acf_detection = acf_pvalues < (alpha/nlag) # Ljung-Box Q-Statistic
@@ -458,7 +461,7 @@ def residual_analysis(X, y, y_hat, nlag = None, alpha = 0.01, round_number = 0, 
     int_dynamics = bool(acf_lag + pacf_lag)
     return (int_heteroscedasticity, int_dynamics)
 
-def nonlinearity_assess_dynamic(X, y, plot, cat=None, alpha = 0.01, difference = 0.4, xticks = None, yticks = None, round_number = 0, lag = 3):
+def nonlinearity_assess_dynamic(X, y, plot = True, cat = None, alpha = 0.01, difference = 0.4, xticks = None, yticks = None, round_number = 0, lag = 3):
     """
     This function assesses the nonlinear correlation between X[:] and y
     
