@@ -8,16 +8,17 @@ import numpy as np
 from dataset_property_new import nonlinearity_assess, collinearity_assess, residual_analysis, nonlinearity_assess_dynamic
 from sklearn.preprocessing import StandardScaler
 from copy import deepcopy
-from os import splitext
+from os.path import splitext
 import matplotlib as mpl
 mpl.style.use('default')
 import warnings
 warnings.filterwarnings('ignore')
+import pdb
 
 def main_SPA(main_data, test_data = False, interpretable = False, continuity = False, group_name = None, spectral_data = False,
             plot_interrogation = False, enough_data = False, nested_cv = False, robust_priority = False, dynamic_model = False, lag = 0,
             alpha = 0.01, cat = None, xticks = None, yticks = None, model_name = None, cv_method = None, K_fold = 5, Nr = 10, alpha_num = 20,
-            num_outer = 10, RNN_activation = 'relu'):
+            num_outer = 10, K_steps = 1, RNN_activation = 'relu', RNN_layers = [512, 256], RNN_state_size = None):
     """
     The main SPA function, which calls all other functions needed for model building.
 
@@ -69,7 +70,7 @@ def main_SPA(main_data, test_data = False, interpretable = False, continuity = F
         If None, SPA uses y as the default value.
     model_name : list of str or None, optional, default = None
         The name of the model(s) you want SPA to evaluate.
-        Valid names are ALVEN/SVR/RF/EN/SPLS/RR/PLS or DALVEN or RNN or SS.
+        Valid names are OLS, ALVEN, SVR, RF, EN, SPLS, RR, PLS, DALVEN, RNN, or SS.
         If None, SPA determines which models are viable based on the data.
     cv_method : str or None, optional, default = None
         Which cross validation method to use.
@@ -84,10 +85,18 @@ def main_SPA(main_data, test_data = False, interpretable = False, continuity = F
     num_outer : int, optional, default = 10
         Number of outer loops used in nested CV.
         Relevant only when nested_cv == True.
+    K_steps : int, optional, default = 1
+        Number of future steps for training and test predictions.
+        Relevant only when dynamic_model == True
     RNN_activation : str, optional, default = relu
         The activation function used to build an RNN.
-        Must be in {relu, tanh, sigmoid, linear}
-        Relevant only when model_name == 'RNN'
+        Must be in {relu, tanh, sigmoid, linear}.
+        All 'RNN_' parameters are relevant only when model_name == 'RNN'
+    RNN_layers : list, optional, default = [512, 256]
+        The number of hidden layers and their neuron count.
+        The RNN cell will have a size of RNN_layers[0].
+        For the default case, we have two hidden layers after the RNN cell,
+        one with 512 neurons, and the other with 256 neurons.
     """
     # Loading group (the actual data) from group_name (a path)
     if group_name:
@@ -111,6 +120,14 @@ def main_SPA(main_data, test_data = False, interpretable = False, continuity = F
         X_test_original = None
         y_test_original = None
 
+    # Ensuring the user didn't pass too many cat or plot labels by mistake
+    if isinstance(cat, (list, tuple)):
+        cat = cat[:m]
+    if isinstance(xticks, (list, tuple)):
+        xticks = xticks[:m]
+    if isinstance(yticks, (list, tuple)):
+        yticks = yticks[:1] # [:1] returns a one-element list, while [0] returns the object
+
     # Determining nonlinearity and multicollinearity automatically
     round_number = 0
     nonlinear = nonlinearity_assess(X_original, y_original, plot_interrogation, cat = cat, alpha = alpha, difference = 0.4, xticks = xticks, yticks = yticks, round_number = round_number)
@@ -119,83 +136,75 @@ def main_SPA(main_data, test_data = False, interpretable = False, continuity = F
         nonlinear_dynamic = nonlinearity_assess_dynamic(X_original, y_original, plot_interrogation, alpha = alpha, difference = 0.4, xticks = xticks, yticks = yticks, round_number = round_number, lag = lag)
         if nonlinear_dynamic:
             nonlinear = True
-    # pdb.set_trace() TODO: confirm these functions return Booleans
 
-    # Ensuring the user didn't pass too many cat or plot labels by mistake
-    if isinstance(cat, (list, tuple):
-        cat = cat[:m]
-    if isinstance(xticks, (list, tuple)):
-        xticks = xticks[:m]
-    if isinstance(yticks, (list, tuple)):
-        yticks = yticks[:1] # [:1] returns a one-element list, while [0] returns the object
-        
     # Selecting a model
     if model_name is None:
         if nonlinear:
             # Nonlinear, nondynamic models
             if not dynamic_model:
-                model_name = {'ALVEN'}
+                model_name = ['ALVEN']
                 if not enough_data or interpretable:
                     print(f'As {"your data are limited"*(not enough_data)}{" and "*(not(enough_data) and interpretable)}{"you require an interpretable model"*interpretable}, only ALVEN will be used.')
                 elif continuity:
                     print('As you have enough data, do not require the model to be interpretable, and require continuity, ALVEN and SVR will be tested')
-                    model_name.add('SVR')
+                    model_name.append('SVR')
                 else:
                     print('As you have enough data, do not require the model to be interpretable, and do not require continuity, ALVEN, SVR, and RF will be tested')
-                    model_name.add('SVR')
-                    model_name.add('RF')
+                    model_name.append('SVR')
+                    model_name.append('RF')
             # Nonlinear, dynamic models
             elif not enough_data or interpretable:
                 print(f'As {"your data are limited"*(not enough_data)}{" and "*(not(enough_data) and interpretable)}{"you require an interpretable model"*interpretable}, DALVEN will be used.')
-                model_name = {'DALVEN'}
+                model_name = ['DALVEN']
             else:
                 print('As you have enough data and do not require the model to be interpretable, an RNN will be used.')
-                model_name = {'RNN'}
+                model_name = ['RNN']
         # Linear, nondynamic models
         elif not dynamic_model:
             if not multicollinear:
                 print('As there is no significant nonlinearity and multicollinearity in the data, OLS will be used.')
-                model_name = {'OLS'}
+                model_name = ['OLS']
             elif spectral_data:
                 print('As you have spectral data, RR and PLS will be used.')
-                model_name = {'RR','PLS'}
+                model_name = ['RR','PLS']
             elif interpretable:
                 print('As you require an interpretable model, EN and SPLS will be used.')
-                model_name = {'EN','SPLS'}
+                model_name = ['EN','SPLS']
             else:
                 print('As your data have significant multicollinearity and you do not require an interpretable model, EN, SPLS, RR, and PLS will be used.')
-                model_name = {'EN','SPLS','RR','PLS'}
+                model_name = ['EN','SPLS','RR','PLS']
         # Linear dynamic model
         else:
             print('As your data have significant dynamics and multicolinearity, SS will be used.') # Originally CVA, SSARX, and MOSEP
-            model_name = {'SS'}
+            model_name = ['SS']
 
     # Cross-Validation Strategy
-    if not dynamic_model:
-        if enough_data:
-            cv_method = f'Single{"_group"*bool(group_name)}'
-            print(f'Single {"grouped CV "*bool(group_name)}{"validation "*(not bool(group_name))}will be used.') # Single grouped CV or single validation set
-        elif group_name is None:
-            cv_method = 'Re_KFold'
-            print(f'{"Nested "*nested_cv}CV with repeated KFold in inner loop {"and one-std rule "*robust_priority}will be used.')
+    if cv_method is None:
+        if not dynamic_model:
+            if enough_data:
+                cv_method = f'Single{"_group"*bool(group_name)}'
+                print(f'Single {"grouped CV "*bool(group_name)}{"validation "*(not bool(group_name))}will be used.') # Single grouped CV or single validation set
+            elif group_name is None:
+                cv_method = 'Re_KFold'
+                print(f'{"Nested "*nested_cv}CV with repeated KFold in inner loop {"and one-std rule "*robust_priority}will be used.')
+            else:
+                cv_method = 'GroupKFold'
+                print(f'{"Nested "*nested_cv}GroupKFold {"with one-std rule "*robust_priority}will be used.')
+        # Dynamic models
+        elif model_name == ['SS']:
+            print('MATLAB/ADAPTx packges with information criterion will be used.')
+        elif enough_data:    
+            cv_method = 'Single_ordered'
+            print('Single validation for time series will be used.')
+        elif nested_cv:
+            cv_method = 'Timeseries'
+            print('Cross-validation for time series {"with one-std rule "*robust_priority}will be used.')
+        elif X_original.shape[0]//X_original.shape[1]<40:
+            cv_method = 'AICc'
+            print('AICc information criteria will be used.')
         else:
-            cv_method = 'GroupKFold'
-            print(f'{"Nested "*nested_cv}GroupKFold {"with one-std rule "*robust_priority}will be used.')
-    # Dynamic models
-    elif model_name == {'SS'}:
-        print('MATLAB/ADAPTx packges with information criterion will be used.')
-    elif enough_data:    
-        cv_method = 'Single_ordered'
-        print('Single validation for time series will be used.')
-    elif nested_cv:
-        cv_method = 'Timeseries'
-        print('Cross-validation for time series {"with one-std rule "*robust_priority}will be used.')
-    elif X_original.shape[0]//X_original.shape[1]<40:
-        cv_method = 'AICc'
-        print('AICc information criteria will be used.')
-    else:
-        cv_method = 'AIC'
-        print('AIC information criteria will be used.')
+            cv_method = 'AIC'
+            print('AIC information criteria will be used.')
 
     # Preprocessing the data
     round_number = 1
@@ -231,13 +240,14 @@ def main_SPA(main_data, test_data = False, interpretable = False, continuity = F
        
         # Determing whether a dynamic model should have been used
         yhat_test = scaler_y.inverse_transform(fitting_result[selected_model]['yhat_test'])
-        _, dynamic_model = residual_analysis(X_test, y_test, yhat_test, alpha = alpha, round_number = round_number)
+        _, dynamic_model = residual_analysis(X_test, y_test, yhat_test, plot = plot_interrogation, alpha = alpha, round_number = round_number)
         if dynamic_model:
             print('A residual analysis found dynamics in the system. Please run SPA again with dynamic_model = True')
         else:
             print('--------------Analysis Is Done--------------') 
         return fitting_result, selected_model
     elif not dynamic_model:
+        global cv # So that run_cv_nondynamic has access to this import
         # Importing the correct CV settings based on robust_priority (one std rule)
         if not robust_priority:
             import cv_final as cv
@@ -248,9 +258,10 @@ def main_SPA(main_data, test_data = False, interpretable = False, continuity = F
         if not nested_cv:
             val_err = np.zeros(len(model_name))
             temp_fitting_result = {}
-            
             for index, model_index in enumerate(model_name):
+                print(f'Running validation on model {model_index}', end = '\r')
                 temp_fitting_result[model_index], val_err[index] = run_cv_nondynamic(model_index, X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale, cv_method, group, K_fold, Nr, alpha_num)
+                print(f'Completed validation on model {model_index}')
                 
             selected_model = model_name[np.argmin(val_err)]
             fitting_result[selected_model] = temp_fitting_result[selected_model]
@@ -285,6 +296,7 @@ def main_SPA(main_data, test_data = False, interpretable = False, continuity = F
             ax.set_xticks(pos)
             ax.set_xticklabels(model_name)
             ax.set_title('Testing MSE distribution using nested CV')
+            plt.savefig('Violin_plot.png')
 
             # Final model fitting
             selected_model = model_name[np.argmin(np.mean(val_err,axis=1))]
@@ -292,21 +304,20 @@ def main_SPA(main_data, test_data = False, interpretable = False, continuity = F
                 
         # Determing whether a dynamic model should have been used
         yhat_test = scaler_y.inverse_transform(fitting_result[selected_model]['yhat_test'])
-        _, dynamic_model = residual_analysis(X_test, y_test, yhat_test, alpha = alpha, round_number = round_number)
+        _, dynamic_model = residual_analysis(X_test, y_test, yhat_test, plot = plot_interrogation, alpha = alpha, round_number = round_number)
         if dynamic_model:
             print('A residual analysis found dynamics in the system. Please run SPA again with dynamic_model = True')
         else:
             print('--------------Analysis Is Done--------------') 
-        return fitting_result, selected_model # TODO: stopped here
+        return fitting_result, selected_model
                     
     else: # Dynamic model
-        steps = int(input('Number of steps you want to test for the future prediction? '))
         if nonlinear:
-            if model_name == {'RNN'}:
+            if model_name == ['RNN']: # TODO: SPA -> IC.py (501) -> timeseries_regression_RNN.py (134) -> RNN_feedback.py (217)
+                                        # Unify state_size and num_layers into RNN_layers, allowing for more flexible NN building
                 selected_model = 'RNN'
                 import timeseries_regression_RNN as t_RNN
                 
-                num_layers = list(map(int,input("Numbers of layers you want to test: ").strip().split()))
                 state_size = list(map(int,input("Numbers of states you want to test: ").strip().split()))
                 cell_type = list(map(str,input("Types of cells you want to use (e.g. regular, LSTM, GRU?): ").strip().split()))
 
@@ -328,31 +339,31 @@ def main_SPA(main_data, test_data = False, interpretable = False, continuity = F
                     if robust_priority and cv_method != 'BIC':
                         print(f'Note: BIC is recommended for robustness, but you selected {cv_method}.')
                     RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN = IC.IC_mse('RNN', X_scale,
-                            y_scale, X_test_scale, y_test_scale, cv_type = cv_method, cell_type = cell_type, activation = activation, num_layers = num_layers,
+                            y_scale, X_test_scale, y_test_scale, cv_type = cv_method, cell_type = cell_type, activation = activation, num_layers = RNN_layers,
                             state_size = state_size, num_steps = num_steps, batch_size = batch_size, epoch_overlap = epoch_overlap, learning_rate = learning_rate,
                             lambda_l2_reg = lambda_l2_reg, num_epochs = num_epochs, max_checks_without_progress = max_checks_without_progress, round_number = 1)
                 elif not robust_priority:
                     import cv_final as cv
                     RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN = cv.CV_mse('RNN', X_scale,
-                            y_scale, X_test_scale, y_test_scale, cv_type = cv_method, K_fold = K_fold, Nr = Nr, cell_type = cell_type, group = group, activation = activation, num_layers = num_layers,
-                            state_size = state_size,num_steps = num_steps, batch_size = batch_size, epoch_overlap = epoch_overlap, learning_rate = learning_rate,
+                            y_scale, X_test_scale, y_test_scale, cv_type = cv_method, K_fold = K_fold, Nr = Nr, cell_type = cell_type, group = group, activation = activation, num_layers = RNN_layers,
+                            state_size = state_size, num_steps = num_steps, batch_size = batch_size, epoch_overlap = epoch_overlap, learning_rate = learning_rate,
                             lambda_l2_reg = lambda_l2_reg, num_epochs = num_epochs, max_checks_without_progress = max_checks_without_progress, round_number = str(round_number))
                 else:
                     import cv_final_onestd as cv
                     RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN = cv.CV_mse('RNN', X_scale,
-                            y_scale, X_test_scale, y_test_scale, cv_type = cv_method, K_fold = K_fold, Nr = Nr, cell_type = cell_type, group = group, activation = activation, num_layers = num_layers,
-                            state_size = state_size,num_steps = num_steps, batch_size = batch_size, epoch_overlap = epoch_overlap, learning_rate = learning_rate,
+                            y_scale, X_test_scale, y_test_scale, cv_type = cv_method, K_fold = K_fold, Nr = Nr, cell_type = cell_type, group = group, activation = activation, num_layers = RNN_layers,
+                            state_size = state_size, num_steps = num_steps, batch_size = batch_size, epoch_overlap = epoch_overlap, learning_rate = learning_rate,
                             lambda_l2_reg = lambda_l2_reg, num_epochs = num_epochs, max_checks_without_progress = max_checks_without_progress, round_number = str(round_number))
                         
                 #k-step prediction
                 num_train = round(X.shape[0]*RNN_hyper['early_stop']['train_ratio'])
                 
                 print('K-step prediction for training')
-                train_y_prediction_kstep, train_loss_kstep = t_RNN.timeseries_RNN_feedback_test(X_scale[:num_train], y_scale[:num_train], X_scale[:num_train],y_scale[:num_train], kstep = steps, cell_type=RNN_hyper['cell_type'],activation = RNN_hyper['activation'], state_size = RNN_hyper['state_size'],\
+                train_y_prediction_kstep, train_loss_kstep = t_RNN.timeseries_RNN_feedback_test(X_scale[:num_train], y_scale[:num_train], X_scale[:num_train],y_scale[:num_train], kstep = K_steps, cell_type=RNN_hyper['cell_type'],activation = RNN_hyper['activation'], state_size = RNN_hyper['state_size'],\
                                                                                                 num_layers = RNN_hyper['num_layers'], location=RNN_model, plot=True, round_number = str(round_number))
                 
                 print('K-step prediction for testing')
-                test_y_prediction_kstep, test_loss_kstep = t_RNN.timeseries_RNN_feedback_test(X_scale[:num_train], y_scale[:num_train], X_test_scale,y_test_scale, kstep = steps, cell_type=RNN_hyper['cell_type'],activation = RNN_hyper['activation'], state_size = RNN_hyper['state_size'],\
+                test_y_prediction_kstep, test_loss_kstep = t_RNN.timeseries_RNN_feedback_test(X_scale[:num_train], y_scale[:num_train], X_test_scale,y_test_scale, kstep = K_steps, cell_type=RNN_hyper['cell_type'],activation = RNN_hyper['activation'], state_size = RNN_hyper['state_size'],\
                                                                                               num_layers = RNN_hyper['num_layers'], location=RNN_model, plot=True, round_number = str(round_number))
                 scaler_y_RNN = StandardScaler(with_mean=True, with_std=True)
                 scaler_y_RNN.fit(y_scale[:num_train])
@@ -426,8 +437,8 @@ def main_SPA(main_data, test_data = False, interpretable = False, continuity = F
                                                    
                     #DALVEN model evaluation after choosing the method
                     if selected_model == 'DALVEN':
-                        DALVEN_mse_test_multi, DALVEN_yhat_test_multi= rm.DALVEN_testing_kstep(X, y, X_test, y_test, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , steps,trans_type = 'auto',plot=True,round_number = str(round_number))
-                        DALVEN_mse_train_multi, DALVEN_yhat_train_multi= rm.DALVEN_testing_kstep(X, y, X, y, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , steps,trans_type = 'auto',plot=True,round_number = str(round_number))
+                        DALVEN_mse_test_multi, DALVEN_yhat_test_multi= rm.DALVEN_testing_kstep(X, y, X_test, y_test, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , K_steps, trans_type = 'auto',plot=True,round_number = str(round_number))
+                        DALVEN_mse_train_multi, DALVEN_yhat_train_multi= rm.DALVEN_testing_kstep(X, y, X, y, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , K_steps, trans_type = 'auto',plot=True,round_number = str(round_number))
 
                         fitting_result[selected_model] = {'model_hyper':DALVEN_hyper,'final_model':DALVEN_model, 'model_params':DALVEN_params , 'mse_train':mse_train_DALVEN, 'mse_val':MSE_v_DALVEN, 'mse_test':mse_test_DALVEN, 'yhat_train':yhat_train_DALVEN, 'yhat_test':yhat_test_DALVEN, 'final_list': final_list}
 
@@ -443,8 +454,8 @@ def main_SPA(main_data, test_data = False, interpretable = False, continuity = F
                 
                     else:
                                   
-                        DALVEN_full_mse_test_multi, DALVEN_full_yhat_test_multi= rm.DALVEN_testing_kstep_full_nonlinear(X, y, X_test, y_test, DALVEN_full_model,DALVEN_full_hyper['retain_index'], DALVEN_full_hyper['degree'], DALVEN_full_hyper['lag'] , steps ,trans_type = 'auto', plot=True,round_number = str(round_number))
-                        DALVEN_full_mse_train_multi, DALVEN_full_yhat_train_multi= rm.DALVEN_testing_kstep_full_nonlinear(X, y, X, y, DALVEN_full_model,DALVEN_full_hyper['retain_index'], DALVEN_full_hyper['degree'], DALVEN_full_hyper['lag'] , steps ,trans_type = 'auto', plot=True,round_number =str(round_number))
+                        DALVEN_full_mse_test_multi, DALVEN_full_yhat_test_multi= rm.DALVEN_testing_kstep_full_nonlinear(X, y, X_test, y_test, DALVEN_full_model,DALVEN_full_hyper['retain_index'], DALVEN_full_hyper['degree'], DALVEN_full_hyper['lag'] , K_steps, trans_type = 'auto', plot=True,round_number = str(round_number))
+                        DALVEN_full_mse_train_multi, DALVEN_full_yhat_train_multi= rm.DALVEN_testing_kstep_full_nonlinear(X, y, X, y, DALVEN_full_model,DALVEN_full_hyper['retain_index'], DALVEN_full_hyper['degree'], DALVEN_full_hyper['lag'] , K_steps ,trans_type = 'auto', plot=True,round_number =str(round_number))
                    
                         fitting_result[selected_model] = {'model_hyper':DALVEN_full_hyper,'final_model':DALVEN_full_model, 'model_params':DALVEN_full_params , 'mse_train':mse_train_DALVEN_full, 'mse_val':MSE_v_DALVEN_full, 'mse_test':mse_test_DALVEN_full, 'yhat_train':yhat_train_DALVEN_full, 'yhat_test':yhat_test_DALVEN_full, 'final_list': final_list_full}
 
@@ -507,12 +518,12 @@ def main_SPA(main_data, test_data = False, interpretable = False, continuity = F
 
                     ### model evaluation
                     if DALVEN_method == 'DALVEN':
-                        DALVEN_mse_test_multi, DALVEN_yhat_test_multi= rm.DALVEN_testing_kstep(X, y, X_test, y_test, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , steps,trans_type = 'auto',plot=True,round_number = str(round_number))
-                        DALVEN_mse_train_multi, DALVEN_yhat_train_multi= rm.DALVEN_testing_kstep(X, y, X, y, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , steps,trans_type = 'auto',plot=True,round_number = str(round_number))
+                        DALVEN_mse_test_multi, DALVEN_yhat_test_multi= rm.DALVEN_testing_kstep(X, y, X_test, y_test, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , K_steps, trans_type = 'auto',plot=True,round_number = str(round_number))
+                        DALVEN_mse_train_multi, DALVEN_yhat_train_multi= rm.DALVEN_testing_kstep(X, y, X, y, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , K_steps, trans_type = 'auto',plot=True,round_number = str(round_number))
                             
                     else:                              
-                        DALVEN_mse_test_multi, DALVEN_yhat_test_multi= rm.DALVEN_testing_kstep_full_nonlinear(X, y, X_test, y_test, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , steps ,trans_type = 'auto', plot=True,round_number = str(round_number))
-                        DALVEN_mse_train_multi, DALVEN_yhat_train_multi= rm.DALVEN_testing_kstep_full_nonlinear(X, y, X, y, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , steps ,trans_type = 'auto', plot=True,round_number =str(round_number))
+                        DALVEN_mse_test_multi, DALVEN_yhat_test_multi= rm.DALVEN_testing_kstep_full_nonlinear(X, y, X_test, y_test, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , K_steps, trans_type = 'auto', plot=True,round_number = str(round_number))
+                        DALVEN_mse_train_multi, DALVEN_yhat_train_multi= rm.DALVEN_testing_kstep_full_nonlinear(X, y, X, y, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , K_steps, trans_type = 'auto', plot=True,round_number =str(round_number))
                    
                     lag_number = DALVEN_hyper['lag']
                                     
@@ -536,7 +547,7 @@ def main_SPA(main_data, test_data = False, interpretable = False, continuity = F
             print('------Model Construction------')
             #matlab
             matlab_params, matlab_myresults, matlab_MSE_train, matlab_MSE_val, matlab_MSE_test, matlab_y_predict_train, matlab_y_predict_val, matlab_y_predict_test, matlab_train_error, matlab_val_error, matlab_test_error = t_matlab.timeseries_matlab_single(X, y, X_test = X_test, y_test= y_test, train_ratio = 1,\
-                                                                                                                                                                                                                                                                 maxorder = maxorder, mynow = 1, steps = steps, plot = True)
+                                                                                                                                                                                                                                                                 maxorder = maxorder, mynow = 1, steps = K_steps, plot = True)
             #adaptx
             ADAPTx = int(input('Do you installed ADAPTx software? [Yes: 1, No: 0] '))
             if ADAPTx:
@@ -549,7 +560,7 @@ def main_SPA(main_data, test_data = False, interpretable = False, continuity = F
                 
                 
                 Adaptx_optimal_params, Adaptx_myresults, Adaptx_MSE_train, Adaptx_MSE_val, Adaptx_MSE_test, Adaptx_y_predict_train, Adaptx_y_predict_val, Adaptx_y_predict_test, Adaptx_train_error, Adaptx_val_error, Adaptx_test_error = t_Adaptx.Adaptx_matlab_single(X, y, data_url = data_url, url = url, X_test=X_test, y_test=y_test, train_ratio = 1,\
-                                                                                                                                                    mymaxlag = mymaxlag, mydegs = mydegs, mynow = 1, steps = steps, plot = True)                     
+                                                                                                                                                    mymaxlag = mymaxlag, mydegs = mydegs, mynow = 1, steps = K_steps, plot = True)                     
                         
             
             if not ADAPTx: 
@@ -593,374 +604,363 @@ def main_SPA(main_data, test_data = False, interpretable = False, continuity = F
 
 
     ############################ model fitting 2nd round if necessary
-    if round_number == 2:
-
-        print('')
-        print("""-----------------------------------------------------
-    The residual contains dynamics unexplained by the static model, therefore the dynamic model is selected.
-    -----------------------------------------""")
-        
-        print('')
-        nonlinear_dynamic = int(input('Do you want to use a nonlinear dynamic model (Yes 1 No 0 Not sure 2): '))
-        
-        if nonlinear_dynamic == 1:
-            nonlinear = 1
-        elif nonlinear_dynamic ==2:
-            nonlinear = nonlinearity_assess(X_original, y_original, plot_interrogation, cat = cat,alpha = alpha, difference = 0.4, xticks = xticks, yticks = yticks, round_number =  round_number)
-            if nonlinear == 0:
-                lag = int(input('The lag number you want to use to assess nonlinear dyanmics: '))
-                nonlinear_dynamic = nonlinearity_assess_dynamic(X_original, y_original, plot_interrogation, alpha = alpha, difference = 0.4, xticks = xticks, yticks = yticks, round_number =  round_number,lag= lag)
-                nonlinear = if_nonlinear or if_nonlinear_dynamic
-        
-        else:
-            nonlinear == 0
-            
-            
-            
-        print('')
-        print("""----------------------------------------------------
-    Based on the information of data characteristics, the following dynamic model is selected:
-    ----------------------------------------------------""")
-            
-        model_name = None
-                
-        if nonlinear == 1:
-            print('The nonlinear dynamic model is selected:')
-            if enough_data == 0 :
-                print('Because you have limited data, DALVEN is recommonded.')
-                model_name = ['DALVEN']
-            elif interpretable == 1:
-                print('Because you would like an interpretable model, DALVEN is recommonded.')
-                model_name = ['DALVEN']            
-            else:
-                print('Because you have engough data and do not require interpretability, RNN is recommonded.')
-                model_name = ['RNN']
-                
-        else:
-            print('There is significant dynamics and multicolinearity, CVA/SSARX/MOSEP are recommonded.')
-            model_name = ['SS']
-            
-        
-        print('')
-        print("""----------------------------------------------------
-    Based on the information of data characteristics, the following fitting strategy is selected:
-    ----------------------------------------------------""")
-            
-        if model_name == ['SS']:
-            print('MATLAB/ADAPTx packges with information criterion will be used')
-            
-        else:    
-            if enough_data:
-                cv_method = 'Single_ordered'
-                print('Single validation is used for time series modeling.')
-            else:
-                if nested_cv:
-                    if robust_priority:
-                        cv_method = 'Timeseries'
-                        print('Cross-validation for time series with one std rule is selected.')
-                                               
-                    else:
-                        cv_method = 'Timeseries'
-                        print('Cross-validation for time series is selected.')
-                else:
-                    cv_method = 'IC'
-                    print('Information criteria is selected.')
-            
-        print('')
-        print("""----------------------------------------------------
-    Start 2nd-Round Model Fitting
-    ----------------------------------------------------""")
-        steps = int(input('Number of steps you want to test for the future prediction? '))
-        
-        if nonlinear:
-            if model_name == ['RNN']:
-                selected_model = 'RNN'
-                import timeseries_regression_RNN as t_RNN
-                
-                print('Please input the following numbers/types from the smallest to the largest: 1 3 5 or linear relu')
-                activation = list(map(str,input("Types of activation function you want to use (e.g. linear, relu, tanh?): ").strip().split()))
-                num_layers = list(map(int,input("Numbers of layers you want to test: ").strip().split()))
-                state_size = list(map(int,input("Numbers of states you want to test: ").strip().split()))
-                cell_type = list(map(str,input("Types of cells you want to use (e.g. regular, LSTM, GRU?): ").strip().split()))
-
-                print('Please provide the following training parameter.')
-                batch_size = int(input("Number of batch used in training you want to test: "))
-                epoch_overlap = input('The overlap between different batch? The number indicate the space between two training, 0 means no space. If no overlap type None. ')
-                if epoch_overlap == 'None':
-                    epoch_overlap = None
-                else:
-                    epoch_overlap = int(epoch_overlap)
-                num_steps = int(input("Number of steps back in past of RNN you want to use : "))
-                max_checks_without_progress = int(input('How many steps for no improvment for early stopping?: '))
-                learning_rate = float(input('Learning rate? '))
-                lambda_l2_reg = float(input('Penalty weight of L2 norm? '))
-                num_epochs = float(input('Maximum number of epochs? ' ))
-                    
-                if cv_method == 'IC':
-                    import IC
-
-                    if robust_priority:
-                        print('BIC is recommended to prefer a simplier model for robustness.')
-                        
-                    IC_method = input('The type of information criterion you want to use (AIC, AICc, BIC), if not known type None, the criterion will be selected between AIC/AICc. ')
-                    if IC_method == 'None':
-                        IC_method = None
-                        
-        
-                    print('------Model Construction------')
-        
-                    RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN= IC.IC_mse('RNN', X_scale, y_scale, X_test_scale, y_test_scale, cv_type = IC_method, cell_type = cell_type,\
-                                                                                                                                            activation = activation, num_layers=num_layers,state_size=state_size,num_steps=num_steps, \
-                                                                                                                                            batch_size=batch_size,epoch_overlap= epoch_overlap, learning_rate=learning_rate, lambda_l2_reg=lambda_l2_reg,\
-                                                                                                                                            num_epochs=num_epochs, max_checks_without_progress = max_checks_without_progress,round_number = str(round_number))
-                    
-                    
-
-                else:
-                    print('------Model Construction------')
-
-                    if not robust_priority:
-                        
-                        import cv_final as cv
-            
-                        RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN= cv.CV_mse('RNN', X_scale, y_scale, X_test_scale, y_test_scale, cv_type = cv_method, K_fold = K_fold, Nr= Nr, cell_type = cell_type,group=group,\
-                                                                                                                                                activation = activation, num_layers=num_layers,state_size=state_size,num_steps=num_steps, \
-                                                                                                                                                batch_size=batch_size,epoch_overlap= epoch_overlap, learning_rate=learning_rate, lambda_l2_reg=lambda_l2_reg,\
-                                                                                                                                                num_epochs=num_epochs, max_checks_without_progress = max_checks_without_progress,round_number = str(round_number))
-                    else:
-                        import cv_final_onestd as cv_std    
-                        print('CV with ons-std rule is used for RNN model')
-
-            
-                        RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN= cv_std.CV_mse('RNN', X_scale, y_scale, X_test_scale, y_test_scale, cv_type = cv_method, K_fold = K_fold, Nr= Nr, cell_type = cell_type,group=group,\
-                                                                                                                                                activation = activation, num_layers=num_layers,state_size=state_size,num_steps=num_steps, \
-                                                                                                                                                batch_size=batch_size,epoch_overlap= epoch_overlap, learning_rate=learning_rate, lambda_l2_reg=lambda_l2_reg,\
-                                                                                                                                                num_epochs=num_epochs, max_checks_without_progress = max_checks_without_progress,round_number = str(round_number))
-                   
-                        
-                     
-                fitting_result[selected_model] = {'model_hyper':RNN_hyper,'final_model':RNN_model, 'mse_train':mse_train_RNN, 'mse_val':mse_val_RNN, 'mse_test':mse_test_RNN, 'yhat_train':yhat_train_RNN, 'yhat_val':yhat_val_RNN, 'yhat_test':yhat_test_RNN, 'MSE_val': MSE_val}
-
-                #k-step prediction
-                num_train=round(X.shape[0]*RNN_hyper['early_stop']['train_ratio'])
-                
-                print('K-step prediction for training')
-                train_y_prediction_kstep, train_loss_kstep = t_RNN.timeseries_RNN_feedback_test(X_scale[:num_train], y_scale[:num_train], X_scale[:num_train],y_scale[:num_train], kstep = steps, cell_type=RNN_hyper['cell_type'],activation = RNN_hyper['activation'], state_size = RNN_hyper['state_size'],\
-                                                                                                                                          num_layers = RNN_hyper['num_layers'], location=RNN_model, plot=True,round_number = str(round_number))
-                print('K-step prediction for training')
-                test_y_prediction_kstep, test_loss_kstep = t_RNN.timeseries_RNN_feedback_test(X_scale[:num_train], y_scale[:num_train], X_test_scale,y_test_scale, kstep = steps, cell_type=RNN_hyper['cell_type'],activation = RNN_hyper['activation'], state_size = RNN_hyper['state_size'],\
-                                                                                                                                          num_layers = RNN_hyper['num_layers'], location=RNN_model, plot=True, round_number = str(round_number))
-                scaler_y_RNN = StandardScaler(with_mean=True, with_std=True)
-                scaler_y_RNN.fit(y_scale[:num_train])
-                yhat_test_RNN = scaler_y_RNN.inverse_transform(yhat_test_RNN)
-            
-                residual_analysis(X_test_scale, y_test_scale, yhat_test_RNN, alpha = alpha, round_number = round_number)
-                        
-                print('--------------Analysis Is Done--------------')
-
-                        
-                        
-                
-
-
-            else:
-                import regression_models as rm
-
-                alpha_num = int(input('Number of penalty weight you want to consider in DALVEN, if not known input 20: '))
-                degree = list(map(int,input("Orders of nonlinear mapping considered in DALVEN: (choose to include 1 2 3) ").strip().split()))
-
-                if int(input('Do you want to test both DALVEN-full/DALVEN? (Yes: 1, No: 0): ')):
-                    if cv_method == 'IC':
-                        import IC
-                        
-                        if robust_priority:
-                            print('BIC is recommended to prefer a simplier model for robustness.')
-                        
-                        IC_method = input('The type of information criterion you want to use (AIC, AICc, BIC), if not known type None, the criterion will be selected between AIC/AICc. ')
-
-                        print('------Model Construction------')
-                        
-                        DALVEN_hyper,DALVEN_model, DALVEN_params, mse_train_DALVEN, mse_test_DALVEN, yhat_train_DALVEN, yhat_test_DALVEN, MSE_v_DALVEN, final_list = IC.IC_mse('DALVEN', X, y, X_test, y_test, cv_type = IC_method, alpha_num=alpha_num, lag=lag, degree=degree, label_name=True, trans_type= 'auto')
-                        DALVEN_full_hyper,DALVEN_full_model, DALVEN_full_params, mse_train_DALVEN_full, mse_test_DALVEN_full, yhat_train_DALVEN_full, yhat_test_DALVEN_full, MSE_v_DALVEN_full, final_list_full = IC.IC_mse('DALVEN_full_nonlinear', X, y, X_test, y_test, cv_type = IC_method, alpha_num=alpha_num, lag=lag, degree=degree, label_name=True, trans_type= 'auto')
-        
-                    else:
-                        #using validation set
-                        if not robust_priority:
-                            import cv_final as cv
-        
-                            print('------Model Construction------')
-
-         
-                            DALVEN_hyper,DALVEN_model, DALVEN_params, mse_train_DALVEN, mse_test_DALVEN, yhat_train_DALVEN, yhat_test_DALVEN, MSE_v_DALVEN, final_list = cv.CV_mse('DALVEN', X, y, X_test, y_test, cv_type = cv_method, K_fold = K_fold, Nr= Nr, \
-                                                                                                                                                                                   alpha_num=alpha_num, label_name=True, trans_type= 'auto',degree=degree,lag = lag)
-                            DALVEN_full_hyper,DALVEN_full_model, DALVEN_full_params, mse_train_DALVEN_full, mse_test_DALVEN_full, yhat_train_DALVEN_full, yhat_test_DALVEN_full, MSE_v_DALVEN_full, final_list_full = cv.CV_mse('DALVEN_full_nonlinear', X, y, X_test, y_test, cv_type = cv_method, K_fold = K_fold, Nr= Nr, \
-                                                                                                                                                                                   alpha_num=alpha_num, label_name=True, trans_type= 'auto',degree=degree,lag = lag)                       
-                            
-                        
-                        else:
-                            print('CV with ons-std rule is used for DALVEN model')
-                            import cv_final_onestd as cv_std    
-                            
-                            print('------Model Construction------')
-         
-                            DALVEN_hyper,DALVEN_model, DALVEN_params, mse_train_DALVEN, mse_test_DALVEN, yhat_train_DALVEN, yhat_test_DALVEN, MSE_v_DALVEN, final_list = cv_std.CV_mse('DALVEN', X, y, X_test, y_test, cv_type = cv_method, K_fold = K_fold, Nr= Nr, \
-                                                                                                                                                                                   alpha_num=alpha_num, label_name=True, trans_type= 'auto',degree=degree,lag = lag)
-                            DALVEN_full_hyper,DALVEN_full_model, DALVEN_full_params, mse_train_DALVEN_full, mse_test_DALVEN_full, yhat_train_DALVEN_full, yhat_test_DALVEN_full, MSE_v_DALVEN_full, final_list_full = cv_std.CV_mse('DALVEN_full_nonlinear', X, y, X_test, y_test, cv_type = cv_method, K_fold = K_fold, Nr= Nr, \
-                                                                                                                                                                                   alpha_num=alpha_num, label_name=True, trans_type= 'auto',degree=degree,lag = lag)
-                    
-                    ##select the method
-                    if MSE_v_DALVEN <= MSE_v_DALVEN_full:
-                        selected_model = 'DALVEN'
-                    else:
-                        selected_model = 'DALVEN_full_nonlinear'
-                            
-                    print('Based on the ' + cv_method +', ' + selected_model +' is selected.')
-                                
-                                                   
-                    #DALVEN model evaluation after choosing the method
-                    if selected_model == 'DALVEN':
-                        DALVEN_mse_test_multi, DALVEN_yhat_test_multi= rm.DALVEN_testing_kstep(X, y, X_test, y_test, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , steps,trans_type = 'auto',plot=True,round_number = str(round_number))
-                        DALVEN_mse_train_multi, DALVEN_yhat_train_multi= rm.DALVEN_testing_kstep(X, y, X, y, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , steps,trans_type = 'auto',plot=True,round_number = str(round_number))
-
-                        lag_number = DALVEN_hyper['lag']
-                                        
-                        scalery = StandardScaler()
-                        scalery.fit(y[lag_number:])
-                                    
-                        yhat_test_DALVEN=scalery.inverse_transform(yhat_test_DALVEN)
-                             
-                        fitting_result[selected_model] = {'model_hyper':DALVEN_hyper,'final_model':DALVEN_model, 'model_params':DALVEN_params , 'mse_train':mse_train_DALVEN, 'mse_val':MSE_v_DALVEN, 'mse_test':mse_test_DALVEN, 'yhat_train':yhat_train_DALVEN, 'yhat_test':yhat_test_DALVEN, 'final_list': final_list}
-                                                  
-                        residual_analysis(X_test[lag_number:], y_test[lag_number:],yhat_test_DALVEN, alpha =alpha, round_number = round_number)
-                                      
-                    else:
-                                  
-                        DALVEN_full_mse_test_multi, DALVEN_full_yhat_test_multi= rm.DALVEN_testing_kstep_full_nonlinear(X, y, X_test, y_test, DALVEN_full_model,DALVEN_full_hyper['retain_index'], DALVEN_full_hyper['degree'], DALVEN_full_hyper['lag'] , steps ,trans_type = 'auto', plot=True,round_number = str(round_number))
-                        DALVEN_full_mse_train_multi, DALVEN_full_yhat_train_multi= rm.DALVEN_testing_kstep_full_nonlinear(X, y, X, y, DALVEN_full_model,DALVEN_full_hyper['retain_index'], DALVEN_full_hyper['degree'], DALVEN_full_hyper['lag'] , steps ,trans_type = 'auto', plot=True,round_number =str(round_number))
-                   
-                        lag_number = DALVEN_full_hyper['lag']
-                                        
-                        scalery = StandardScaler()
-                        scalery.fit(y[lag_number:])
-                                    
-                        yhat_test_DALVEN_full=scalery.inverse_transform(yhat_test_DALVEN_full)
-                             
-                        fitting_result[selected_model] = {'model_hyper':DALVEN_full_hyper,'final_model':DALVEN_full_model, 'model_params':DALVEN_full_params , 'mse_train':mse_train_DALVEN_full, 'mse_val':MSE_v_DALVEN_full, 'mse_test':mse_test_DALVEN_full, 'yhat_train':yhat_train_DALVEN_full, 'yhat_test':yhat_test_DALVEN_full, 'final_list': final_list_full}
-                               
-                        residual_analysis(X_test[lag_number:], y_test[lag_number:],yhat_test_DALVEN_full, alpha =alpha, round_number = round_number)
-                    print('--------------Analysis Is Done--------------')
-                else:
-                    DALVEN_method = input('Type in the method you want to test: DALVEN_full_nonlinear or DALVEN. ')
-                    selected_model = DALVEN_method
-                    if cv_method == 'IC':
-                        import IC
-                        if robust_priority:
-                            print('BIC is recommended to prefer a simplier model for robustness.')
-                        IC_method = input('The type of information criterion you want to use (AIC, AICc, BIC), if not known type None, the criterion will be selected between AIC/AICc. ')
-                        print('------Model Construction------')
-                        DALVEN_hyper,DALVEN_model, DALVEN_params, mse_train_DALVEN, mse_test_DALVEN, yhat_train_DALVEN, yhat_test_DALVEN, MSE_v_DALVEN,
-                                final_list = IC.IC_mse(DALVEN_method, X, y, X_test, y_test, cv_type = IC_method, alpha_num=alpha_num, lag=lag, degree=degree, label_name=True, trans_type= 'auto')
-                    else:
-                        # Using validation set
-                        print('------Model Construction------')
-                        if not robust_priority:
-                            import cv_final as cv
-                            DALVEN_hyper,DALVEN_model, DALVEN_params, mse_train_DALVEN, mse_test_DALVEN, yhat_train_DALVEN, yhat_test_DALVEN, MSE_v_DALVEN, final_list = cv.CV_mse(DALVEN_method, X, y, 
-                                    X_test, y_test, cv_type = cv_method, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num, label_name=True, trans_type= 'auto',degree=degree,lag = lag)
-                        else:
-                            print('CV with ons-std rule is used for DALVEN model')
-                            import cv_final_onestd as cv_std    
-                            DALVEN_hyper,DALVEN_model, DALVEN_params, mse_train_DALVEN, mse_test_DALVEN, yhat_train_DALVEN, yhat_test_DALVEN, MSE_v_DALVEN, final_list = cv_std.CV_mse(DALVEN_method, X, y,
-                                    X_test, y_test, cv_type = cv_method, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num, label_name=True, trans_type= 'auto',degree=degree,lag = lag)
-
-                    fitting_result[selected_model] = {'model_hyper':DALVEN_hyper,'final_model':DALVEN_model, 'model_params':DALVEN_params , 'mse_train':mse_train_DALVEN, 'mse_val':MSE_v_DALVEN,
-                                    'mse_test':mse_test_DALVEN, 'yhat_train':yhat_train_DALVEN, 'yhat_test':yhat_test_DALVEN, 'final_list': final_list}
-
-                    # Model evaluation
-                    if DALVEN_method == 'DALVEN':
-                        DALVEN_mse_test_multi, DALVEN_yhat_test_multi= rm.DALVEN_testing_kstep(X, y, X_test, y_test, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , steps,trans_type = 'auto',plot=True,round_number = str(round_number))
-                        DALVEN_mse_train_multi, DALVEN_yhat_train_multi= rm.DALVEN_testing_kstep(X, y, X, y, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , steps,trans_type = 'auto',plot=True,round_number = str(round_number))
-                            
-                    else:                              
-                        DALVEN_mse_test_multi, DALVEN_yhat_test_multi= rm.DALVEN_testing_kstep_full_nonlinear(X, y, X_test, y_test, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , steps ,trans_type = 'auto', plot=True,round_number = str(round_number))
-                        DALVEN_mse_train_multi, DALVEN_yhat_train_multi= rm.DALVEN_testing_kstep_full_nonlinear(X, y, X, y, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , steps ,trans_type = 'auto', plot=True,round_number =str(round_number))
-                   
-                    lag_number = DALVEN_hyper['lag']
-                                    
-                    scalery = StandardScaler()
-                    scalery.fit(y[lag_number:])
-                                
-                    yhat_test_DALVEN=scalery.inverse_transform(yhat_test_DALVEN)
-                    residual_analysis(X_test[lag_number:], y_test[lag_number:],yhat_test_DALVEN, alpha =alpha, round_number = round_number)
-            
-                    print('--------------Analysis Is Done--------------')
-                        
-                            
-
-                    
-        
-        else:
-            import timeseries_regression_matlab as t_matlab
-            
-            maxorder = int(input('Maximum order number you want to consider: '))
-            
-            print('------Model Construction------')
-            #matlab
-            matlab_params, matlab_myresults, matlab_MSE_train, matlab_MSE_val, matlab_MSE_test, matlab_y_predict_train, matlab_y_predict_val, matlab_y_predict_test, matlab_train_error, matlab_val_error, matlab_test_error = t_matlab.timeseries_matlab_single(X, y, X_test = X_test, y_test= y_test, train_ratio = 1,\
-                                                                                                                                                                                                                                                                 maxorder = maxorder, mynow = 1, steps = steps, plot = True)
-            #adaptx
-            ADAPTx = int(input('Do you installed ADAPTx software? [Yes: 1, No: 0] '))
-            if ADAPTx:
-                import timeseries_regression_Adaptx as t_Adaptx
-        
-                url = input('Url for the ADAPTx software (e.g. C:\\Users\\Vicky\\Desktop\\AdaptX\\ADAPTX35M9\\): ')
-                data_url =  input('Saved data file URL for the ADAPTx software (e.g. C:\\Users\\Vicky\\Desktop\\AdaptX\\ADAPTX35M9\\test\\): ')
-                mymaxlag = int(input('Maximum number of lags considered in ADAPTx: '))
-                mydegs = [int(x) for x in input('Degree of trend t in ADAPTx [if not known use default -1 0 1]: ').split()]
-                
-                
-                Adaptx_optimal_params, Adaptx_myresults, Adaptx_MSE_train, Adaptx_MSE_val, Adaptx_MSE_test, Adaptx_y_predict_train, Adaptx_y_predict_val, Adaptx_y_predict_test, Adaptx_train_error, Adaptx_val_error, Adaptx_test_error = t_Adaptx.Adaptx_matlab_single(X, y, data_url = data_url, url = url, X_test=X_test, y_test=y_test, train_ratio = 1,\
-                                                                                                                                                    mymaxlag = mymaxlag, mydegs = mydegs, mynow = 1, steps = steps, plot = True)                     
-                        
-            
-            if not ADAPTx: 
-                print('The final state space model is fitted based on ' + matlab_params['method'][0] + ' using MATLAB.')
-                selected_model = matlab_params['method'][0]
-                yhat_test = matlab_y_predict_test.transpose()[:,0].reshape((-1,1))
-                yhat_test = scaler_y.inverse_transform(yhat_test)
-                
-                fitting_result[selected_model] = {'model_hyper':matlab_params,'final_model':matlab_myresults, 'mse_train':matlab_MSE_train, 'mse_val':matlab_MSE_val, 'mse_test':matlab_MSE_test, 'yhat_train':matlab_y_predict_train, 'yhat_val':matlab_y_predict_val,'yhat_test':matlab_y_predict_test}
-
-                residual_analysis(X_test, y_test,yhat_test, alpha = alpha, round_number = round_number)
-                print('--------------Analysis Is Done--------------')
-                
-            else:
-                print('The final state space model is selected based on minimum averaged MSE.')
-                if np.mean(matlab_MSE_train) <= np.mean(Adaptx_MSE_train):
-                    print('State space model by Matlab is selected. Model parameters is stored in matlab_params.')
-                    print('The final state space model is fitted based on ' + matlab_params['method'][0] + ' using MATLAB.')
-                    selected_model = matlab_params['method'][0]
-                    yhat_test = matlab_y_predict_test.transpose()[:,0].reshape((-1,1))
-                    yhat_test = scaler_y.inverse_transform(yhat_test)
-                    fitting_result[selected_model] = {'model_hyper':matlab_params,'final_model':matlab_myresults, 'mse_train':matlab_MSE_train, 'mse_val':matlab_MSE_val, 'mse_test':matlab_MSE_test, 'yhat_train':matlab_y_predict_train, 'yhat_val':matlab_y_predict_val,'yhat_test':matlab_y_predict_test}
-
-                    residual_analysis(X_test, y_test,yhat_test, alpha = alpha, round_number = round_number)
-                    print('--------------Analysis Is Done--------------')
-                    
-                    
-                else:
-                    print('State space model by ADAPTx is selected. Model parameters is stored in Adaptx_optimal_params.')
-                    selected_model = 'ADAPTx'
-                    yhat_test = Adaptx_y_predict_test.transpose()[Adaptx_optimal_params['lag'][0][0]:,0].reshape((-1,1))
-                    yhat_test = scaler_y.inverse_transform(yhat_test)                
-                    fitting_result[selected_model] = {'model_hyper':Adaptx_optimal_params,'final_model':Adaptx_myresults, 'mse_train':Adaptx_MSE_train, 'mse_val':Adaptx_MSE_val, 'mse_test':Adaptx_MSE_test, 'yhat_train':Adaptx_y_predict_train, 'yhat_val':Adaptx_y_predict_val,'yhat_test':Adaptx_y_predict_test}
-
-                    residual_analysis(X_test[Adaptx_optimal_params['lag'][0][0]:,:], y_test[Adaptx_optimal_params['lag'][0][0]:,0].reshape((-1,1)),yhat_test, alpha = alpha, round_number = round_number)
-                    print('--------------Analysis Is Done--------------')
+#    if round_number == 2:
+#        nonlinear_dynamic = int(input('Do you want to use a nonlinear dynamic model (Yes 1 No 0 Not sure 2): '))
+#        if nonlinear_dynamic == 1:
+#            nonlinear = 1
+#        elif nonlinear_dynamic ==2:
+#            nonlinear = nonlinearity_assess(X_original, y_original, plot_interrogation, cat = cat,alpha = alpha, difference = 0.4, xticks = xticks, yticks = yticks, round_number =  round_number)
+#            if nonlinear == 0:
+#                lag = int(input('The lag number you want to use to assess nonlinear dyanmics: '))
+#                nonlinear_dynamic = nonlinearity_assess_dynamic(X_original, y_original, plot_interrogation, alpha = alpha, difference = 0.4, xticks = xticks, yticks = yticks, round_number =  round_number,lag= lag)
+#                nonlinear = if_nonlinear or if_nonlinear_dynamic
+#        else:
+#            nonlinear == 0
+#        print('')
+#        print("""----------------------------------------------------
+#    Based on the information of data characteristics, the following dynamic model is selected:
+#    ----------------------------------------------------""")
+#            
+#        model_name = None
+#                
+#        if nonlinear == 1:
+#            print('The nonlinear dynamic model is selected:')
+#            if enough_data == 0 :
+#                print('Because you have limited data, DALVEN is recommonded.')
+#                model_name = ['DALVEN']
+#            elif interpretable == 1:
+#                print('Because you would like an interpretable model, DALVEN is recommonded.')
+#                model_name = ['DALVEN']            
+#            else:
+#                print('Because you have engough data and do not require interpretability, RNN is recommonded.')
+#                model_name = ['RNN']
+#                
+#        else:
+#            print('There is significant dynamics and multicolinearity, CVA/SSARX/MOSEP are recommonded.')
+#            model_name = ['SS']
+#            
+#        
+#        print('')
+#        print("""----------------------------------------------------
+#    Based on the information of data characteristics, the following fitting strategy is selected:
+#    ----------------------------------------------------""")
+#            
+#        if model_name == ['SS']:
+#            print('MATLAB/ADAPTx packges with information criterion will be used')
+#            
+#        else:    
+#            if enough_data:
+#                cv_method = 'Single_ordered'
+#                print('Single validation is used for time series modeling.')
+#            else:
+#                if nested_cv:
+#                    if robust_priority:
+#                        cv_method = 'Timeseries'
+#                        print('Cross-validation for time series with one std rule is selected.')
+#                                               
+#                    else:
+#                        cv_method = 'Timeseries'
+#                        print('Cross-validation for time series is selected.')
+#                else:
+#                    cv_method = 'IC'
+#                    print('Information criteria is selected.')
+#            
+#        print('')
+#        print("""----------------------------------------------------
+#    Start 2nd-Round Model Fitting
+#    ----------------------------------------------------""")
+#        steps = int(input('Number of steps you want to test for the future prediction? '))
+#        
+#        if nonlinear:
+#            if model_name == ['RNN']:
+#                selected_model = 'RNN'
+#                import timeseries_regression_RNN as t_RNN
+#                
+#                print('Please input the following numbers/types from the smallest to the largest: 1 3 5 or linear relu')
+#                activation = list(map(str,input("Types of activation function you want to use (e.g. linear, relu, tanh?): ").strip().split()))
+#                num_layers = list(map(int,input("Numbers of layers you want to test: ").strip().split()))
+#                state_size = list(map(int,input("Numbers of states you want to test: ").strip().split()))
+#                cell_type = list(map(str,input("Types of cells you want to use (e.g. regular, LSTM, GRU?): ").strip().split()))
+#
+#                print('Please provide the following training parameter.')
+#                batch_size = int(input("Number of batch used in training you want to test: "))
+#                epoch_overlap = input('The overlap between different batch? The number indicate the space between two training, 0 means no space. If no overlap type None. ')
+#                if epoch_overlap == 'None':
+#                    epoch_overlap = None
+#                else:
+#                    epoch_overlap = int(epoch_overlap)
+#                num_steps = int(input("Number of steps back in past of RNN you want to use : "))
+#                max_checks_without_progress = int(input('How many steps for no improvment for early stopping?: '))
+#                learning_rate = float(input('Learning rate? '))
+#                lambda_l2_reg = float(input('Penalty weight of L2 norm? '))
+#                num_epochs = float(input('Maximum number of epochs? ' ))
+#                    
+#                if cv_method == 'IC':
+#                    import IC
+#
+#                    if robust_priority:
+#                        print('BIC is recommended to prefer a simplier model for robustness.')
+#                        
+#                    IC_method = input('The type of information criterion you want to use (AIC, AICc, BIC), if not known type None, the criterion will be selected between AIC/AICc. ')
+#                    if IC_method == 'None':
+#                        IC_method = None
+#                        
+#        
+#                    print('------Model Construction------')
+#        
+#                    RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN= IC.IC_mse('RNN', X_scale, y_scale, X_test_scale, y_test_scale, cv_type = IC_method, cell_type = cell_type,\
+#                                                                                                                                            activation = activation, num_layers=num_layers,state_size=state_size,num_steps=num_steps, \
+#                                                                                                                                            batch_size=batch_size,epoch_overlap= epoch_overlap, learning_rate=learning_rate, lambda_l2_reg=lambda_l2_reg,\
+#                                                                                                                                            num_epochs=num_epochs, max_checks_without_progress = max_checks_without_progress,round_number = str(round_number))
+#                    
+#                    
+#
+#                else:
+#                    print('------Model Construction------')
+#
+#                    if not robust_priority:
+#                        
+#                        import cv_final as cv
+#            
+#                        RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN= cv.CV_mse('RNN', X_scale, y_scale, X_test_scale, y_test_scale, cv_type = cv_method, K_fold = K_fold, Nr= Nr, cell_type = cell_type,group=group,\
+#                                                                                                                                                activation = activation, num_layers=num_layers,state_size=state_size,num_steps=num_steps, \
+#                                                                                                                                                batch_size=batch_size,epoch_overlap= epoch_overlap, learning_rate=learning_rate, lambda_l2_reg=lambda_l2_reg,\
+#                                                                                                                                                num_epochs=num_epochs, max_checks_without_progress = max_checks_without_progress,round_number = str(round_number))
+#                    else:
+#                        import cv_final_onestd as cv_std    
+#                        print('CV with ons-std rule is used for RNN model')
+#
+#            
+#                        RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN= cv_std.CV_mse('RNN', X_scale, y_scale, X_test_scale, y_test_scale, cv_type = cv_method, K_fold = K_fold, Nr= Nr, cell_type = cell_type,group=group,\
+#                                                                                                                                                activation = activation, num_layers=num_layers,state_size=state_size,num_steps=num_steps, \
+#                                                                                                                                                batch_size=batch_size,epoch_overlap= epoch_overlap, learning_rate=learning_rate, lambda_l2_reg=lambda_l2_reg,\
+#                                                                                                                                                num_epochs=num_epochs, max_checks_without_progress = max_checks_without_progress,round_number = str(round_number))
+#                   
+#                        
+#                     
+#                fitting_result[selected_model] = {'model_hyper':RNN_hyper,'final_model':RNN_model, 'mse_train':mse_train_RNN, 'mse_val':mse_val_RNN, 'mse_test':mse_test_RNN, 'yhat_train':yhat_train_RNN, 'yhat_val':yhat_val_RNN, 'yhat_test':yhat_test_RNN, 'MSE_val': MSE_val}
+#
+#                #k-step prediction
+#                num_train=round(X.shape[0]*RNN_hyper['early_stop']['train_ratio'])
+#                
+#                print('K-step prediction for training')
+#                train_y_prediction_kstep, train_loss_kstep = t_RNN.timeseries_RNN_feedback_test(X_scale[:num_train], y_scale[:num_train], X_scale[:num_train],y_scale[:num_train], kstep = steps, cell_type=RNN_hyper['cell_type'],activation = RNN_hyper['activation'], state_size = RNN_hyper['state_size'],\
+#                                                                                                                                          num_layers = RNN_hyper['num_layers'], location=RNN_model, plot=True,round_number = str(round_number))
+#                print('K-step prediction for training')
+#                test_y_prediction_kstep, test_loss_kstep = t_RNN.timeseries_RNN_feedback_test(X_scale[:num_train], y_scale[:num_train], X_test_scale,y_test_scale, kstep = steps, cell_type=RNN_hyper['cell_type'],activation = RNN_hyper['activation'], state_size = RNN_hyper['state_size'],\
+#                                                                                                                                          num_layers = RNN_hyper['num_layers'], location=RNN_model, plot=True, round_number = str(round_number))
+#                scaler_y_RNN = StandardScaler(with_mean=True, with_std=True)
+#                scaler_y_RNN.fit(y_scale[:num_train])
+#                yhat_test_RNN = scaler_y_RNN.inverse_transform(yhat_test_RNN)
+#            
+#                residual_analysis(X_test_scale, y_test_scale, yhat_test_RNN, alpha = alpha, round_number = round_number)
+#                        
+#                print('--------------Analysis Is Done--------------')
+#
+#                        
+#                        
+#                
+#
+#
+#            else:
+#                import regression_models as rm
+#
+#                alpha_num = int(input('Number of penalty weight you want to consider in DALVEN, if not known input 20: '))
+#                degree = list(map(int,input("Orders of nonlinear mapping considered in DALVEN: (choose to include 1 2 3) ").strip().split()))
+#
+#                if int(input('Do you want to test both DALVEN-full/DALVEN? (Yes: 1, No: 0): ')):
+#                    if cv_method == 'IC':
+#                        import IC
+#                        
+#                        if robust_priority:
+#                            print('BIC is recommended to prefer a simplier model for robustness.')
+#                        
+#                        IC_method = input('The type of information criterion you want to use (AIC, AICc, BIC), if not known type None, the criterion will be selected between AIC/AICc. ')
+#
+#                        print('------Model Construction------')
+#                        
+#                        DALVEN_hyper,DALVEN_model, DALVEN_params, mse_train_DALVEN, mse_test_DALVEN, yhat_train_DALVEN, yhat_test_DALVEN, MSE_v_DALVEN, final_list = IC.IC_mse('DALVEN', X, y, X_test, y_test, cv_type = IC_method, alpha_num=alpha_num, lag=lag, degree=degree, label_name=True, trans_type= 'auto')
+#                        DALVEN_full_hyper,DALVEN_full_model, DALVEN_full_params, mse_train_DALVEN_full, mse_test_DALVEN_full, yhat_train_DALVEN_full, yhat_test_DALVEN_full, MSE_v_DALVEN_full, final_list_full = IC.IC_mse('DALVEN_full_nonlinear', X, y, X_test, y_test, cv_type = IC_method, alpha_num=alpha_num, lag=lag, degree=degree, label_name=True, trans_type= 'auto')
+#        
+#                    else:
+#                        #using validation set
+#                        if not robust_priority:
+#                            import cv_final as cv
+#        
+#                            print('------Model Construction------')
+#
+#         
+#                            DALVEN_hyper,DALVEN_model, DALVEN_params, mse_train_DALVEN, mse_test_DALVEN, yhat_train_DALVEN, yhat_test_DALVEN, MSE_v_DALVEN, final_list = cv.CV_mse('DALVEN', X, y, X_test, y_test, cv_type = cv_method, K_fold = K_fold, Nr= Nr, \
+#                                                                                                                                                                                   alpha_num=alpha_num, label_name=True, trans_type= 'auto',degree=degree,lag = lag)
+#                            DALVEN_full_hyper,DALVEN_full_model, DALVEN_full_params, mse_train_DALVEN_full, mse_test_DALVEN_full, yhat_train_DALVEN_full, yhat_test_DALVEN_full, MSE_v_DALVEN_full, final_list_full = cv.CV_mse('DALVEN_full_nonlinear', X, y, X_test, y_test, cv_type = cv_method, K_fold = K_fold, Nr= Nr, \
+#                                                                                                                                                                                   alpha_num=alpha_num, label_name=True, trans_type= 'auto',degree=degree,lag = lag)                       
+#                            
+#                        
+#                        else:
+#                            print('CV with ons-std rule is used for DALVEN model')
+#                            import cv_final_onestd as cv_std    
+#                            
+#                            print('------Model Construction------')
+#         
+#                            DALVEN_hyper,DALVEN_model, DALVEN_params, mse_train_DALVEN, mse_test_DALVEN, yhat_train_DALVEN, yhat_test_DALVEN, MSE_v_DALVEN, final_list = cv_std.CV_mse('DALVEN', X, y, X_test, y_test, cv_type = cv_method, K_fold = K_fold, Nr= Nr, \
+#                                                                                                                                                                                   alpha_num=alpha_num, label_name=True, trans_type= 'auto',degree=degree,lag = lag)
+#                            DALVEN_full_hyper,DALVEN_full_model, DALVEN_full_params, mse_train_DALVEN_full, mse_test_DALVEN_full, yhat_train_DALVEN_full, yhat_test_DALVEN_full, MSE_v_DALVEN_full, final_list_full = cv_std.CV_mse('DALVEN_full_nonlinear', X, y, X_test, y_test, cv_type = cv_method, K_fold = K_fold, Nr= Nr, \
+#                                                                                                                                                                                   alpha_num=alpha_num, label_name=True, trans_type= 'auto',degree=degree,lag = lag)
+#                    
+#                    ##select the method
+#                    if MSE_v_DALVEN <= MSE_v_DALVEN_full:
+#                        selected_model = 'DALVEN'
+#                    else:
+#                        selected_model = 'DALVEN_full_nonlinear'
+#                            
+#                    print('Based on the ' + cv_method +', ' + selected_model +' is selected.')
+#                                
+#                                                   
+#                    #DALVEN model evaluation after choosing the method
+#                    if selected_model == 'DALVEN':
+#                        DALVEN_mse_test_multi, DALVEN_yhat_test_multi= rm.DALVEN_testing_kstep(X, y, X_test, y_test, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , steps,trans_type = 'auto',plot=True,round_number = str(round_number))
+#                        DALVEN_mse_train_multi, DALVEN_yhat_train_multi= rm.DALVEN_testing_kstep(X, y, X, y, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , steps,trans_type = 'auto',plot=True,round_number = str(round_number))
+#
+#                        lag_number = DALVEN_hyper['lag']
+#                                        
+#                        scalery = StandardScaler()
+#                        scalery.fit(y[lag_number:])
+#                                    
+#                        yhat_test_DALVEN=scalery.inverse_transform(yhat_test_DALVEN)
+#                             
+#                        fitting_result[selected_model] = {'model_hyper':DALVEN_hyper,'final_model':DALVEN_model, 'model_params':DALVEN_params , 'mse_train':mse_train_DALVEN, 'mse_val':MSE_v_DALVEN, 'mse_test':mse_test_DALVEN, 'yhat_train':yhat_train_DALVEN, 'yhat_test':yhat_test_DALVEN, 'final_list': final_list}
+#                                                  
+#                        residual_analysis(X_test[lag_number:], y_test[lag_number:],yhat_test_DALVEN, alpha =alpha, round_number = round_number)
+#                                      
+#                    else:
+#                                  
+#                        DALVEN_full_mse_test_multi, DALVEN_full_yhat_test_multi= rm.DALVEN_testing_kstep_full_nonlinear(X, y, X_test, y_test, DALVEN_full_model,DALVEN_full_hyper['retain_index'], DALVEN_full_hyper['degree'], DALVEN_full_hyper['lag'] , steps ,trans_type = 'auto', plot=True,round_number = str(round_number))
+#                        DALVEN_full_mse_train_multi, DALVEN_full_yhat_train_multi= rm.DALVEN_testing_kstep_full_nonlinear(X, y, X, y, DALVEN_full_model,DALVEN_full_hyper['retain_index'], DALVEN_full_hyper['degree'], DALVEN_full_hyper['lag'] , steps ,trans_type = 'auto', plot=True,round_number =str(round_number))
+#                   
+#                        lag_number = DALVEN_full_hyper['lag']
+#                                        
+#                        scalery = StandardScaler()
+#                        scalery.fit(y[lag_number:])
+#                                    
+#                        yhat_test_DALVEN_full=scalery.inverse_transform(yhat_test_DALVEN_full)
+#                             
+#                        fitting_result[selected_model] = {'model_hyper':DALVEN_full_hyper,'final_model':DALVEN_full_model, 'model_params':DALVEN_full_params , 'mse_train':mse_train_DALVEN_full, 'mse_val':MSE_v_DALVEN_full, 'mse_test':mse_test_DALVEN_full, 'yhat_train':yhat_train_DALVEN_full, 'yhat_test':yhat_test_DALVEN_full, 'final_list': final_list_full}
+#                               
+#                        residual_analysis(X_test[lag_number:], y_test[lag_number:],yhat_test_DALVEN_full, alpha =alpha, round_number = round_number)
+#                    print('--------------Analysis Is Done--------------')
+#                else:
+#                    DALVEN_method = input('Type in the method you want to test: DALVEN_full_nonlinear or DALVEN. ')
+#                    selected_model = DALVEN_method
+#                    if cv_method == 'IC':
+#                        import IC
+#                        if robust_priority:
+#                            print('BIC is recommended to prefer a simplier model for robustness.')
+#                        IC_method = input('The type of information criterion you want to use (AIC, AICc, BIC), if not known type None, the criterion will be selected between AIC/AICc. ')
+#                        print('------Model Construction------')
+#                        DALVEN_hyper,DALVEN_model, DALVEN_params, mse_train_DALVEN, mse_test_DALVEN, yhat_train_DALVEN, yhat_test_DALVEN, MSE_v_DALVEN,
+#                                final_list = IC.IC_mse(DALVEN_method, X, y, X_test, y_test, cv_type = IC_method, alpha_num=alpha_num, lag=lag, degree=degree, label_name=True, trans_type= 'auto')
+#                    else:
+#                        # Using validation set
+#                        print('------Model Construction------')
+#                        if not robust_priority:
+#                            import cv_final as cv
+#                            DALVEN_hyper,DALVEN_model, DALVEN_params, mse_train_DALVEN, mse_test_DALVEN, yhat_train_DALVEN, yhat_test_DALVEN, MSE_v_DALVEN, final_list = cv.CV_mse(DALVEN_method, X, y, 
+#                                    X_test, y_test, cv_type = cv_method, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num, label_name=True, trans_type= 'auto',degree=degree,lag = lag)
+#                        else:
+#                            print('CV with ons-std rule is used for DALVEN model')
+#                            import cv_final_onestd as cv_std    
+#                            DALVEN_hyper,DALVEN_model, DALVEN_params, mse_train_DALVEN, mse_test_DALVEN, yhat_train_DALVEN, yhat_test_DALVEN, MSE_v_DALVEN, final_list = cv_std.CV_mse(DALVEN_method, X, y,
+#                                    X_test, y_test, cv_type = cv_method, K_fold = K_fold, Nr= Nr, alpha_num=alpha_num, label_name=True, trans_type= 'auto',degree=degree,lag = lag)
+#
+#                    fitting_result[selected_model] = {'model_hyper':DALVEN_hyper,'final_model':DALVEN_model, 'model_params':DALVEN_params , 'mse_train':mse_train_DALVEN, 'mse_val':MSE_v_DALVEN,
+#                                    'mse_test':mse_test_DALVEN, 'yhat_train':yhat_train_DALVEN, 'yhat_test':yhat_test_DALVEN, 'final_list': final_list}
+#
+#                    # Model evaluation
+#                    if DALVEN_method == 'DALVEN':
+#                        DALVEN_mse_test_multi, DALVEN_yhat_test_multi= rm.DALVEN_testing_kstep(X, y, X_test, y_test, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , steps,trans_type = 'auto',plot=True,round_number = str(round_number))
+#                        DALVEN_mse_train_multi, DALVEN_yhat_train_multi= rm.DALVEN_testing_kstep(X, y, X, y, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , steps,trans_type = 'auto',plot=True,round_number = str(round_number))
+#                            
+#                    else:                              
+#                        DALVEN_mse_test_multi, DALVEN_yhat_test_multi= rm.DALVEN_testing_kstep_full_nonlinear(X, y, X_test, y_test, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , steps ,trans_type = 'auto', plot=True,round_number = str(round_number))
+#                        DALVEN_mse_train_multi, DALVEN_yhat_train_multi= rm.DALVEN_testing_kstep_full_nonlinear(X, y, X, y, DALVEN_model,DALVEN_hyper['retain_index'], DALVEN_hyper['degree'], DALVEN_hyper['lag'] , steps ,trans_type = 'auto', plot=True,round_number =str(round_number))
+#                   
+#                    lag_number = DALVEN_hyper['lag']
+#                                    
+#                    scalery = StandardScaler()
+#                    scalery.fit(y[lag_number:])
+#                                
+#                    yhat_test_DALVEN=scalery.inverse_transform(yhat_test_DALVEN)
+#                    residual_analysis(X_test[lag_number:], y_test[lag_number:],yhat_test_DALVEN, alpha =alpha, round_number = round_number)
+#            
+#                    print('--------------Analysis Is Done--------------')
+#                        
+#                            
+#
+#                    
+#        
+#        else:
+#            import timeseries_regression_matlab as t_matlab
+#            
+#            maxorder = int(input('Maximum order number you want to consider: '))
+#            
+#            print('------Model Construction------')
+#            #matlab
+#            matlab_params, matlab_myresults, matlab_MSE_train, matlab_MSE_val, matlab_MSE_test, matlab_y_predict_train, matlab_y_predict_val, matlab_y_predict_test, matlab_train_error, matlab_val_error, matlab_test_error = t_matlab.timeseries_matlab_single(X, y, X_test = X_test, y_test= y_test, train_ratio = 1,\
+#                                                                                                                                                                                                                                                                 maxorder = maxorder, mynow = 1, steps = steps, plot = True)
+#            #adaptx
+#            ADAPTx = int(input('Do you installed ADAPTx software? [Yes: 1, No: 0] '))
+#            if ADAPTx:
+#                import timeseries_regression_Adaptx as t_Adaptx
+#        
+#                url = input('Url for the ADAPTx software (e.g. C:\\Users\\Vicky\\Desktop\\AdaptX\\ADAPTX35M9\\): ')
+#                data_url =  input('Saved data file URL for the ADAPTx software (e.g. C:\\Users\\Vicky\\Desktop\\AdaptX\\ADAPTX35M9\\test\\): ')
+#                mymaxlag = int(input('Maximum number of lags considered in ADAPTx: '))
+#                mydegs = [int(x) for x in input('Degree of trend t in ADAPTx [if not known use default -1 0 1]: ').split()]
+#                
+#                
+#                Adaptx_optimal_params, Adaptx_myresults, Adaptx_MSE_train, Adaptx_MSE_val, Adaptx_MSE_test, Adaptx_y_predict_train, Adaptx_y_predict_val, Adaptx_y_predict_test, Adaptx_train_error, Adaptx_val_error, Adaptx_test_error = t_Adaptx.Adaptx_matlab_single(X, y, data_url = data_url, url = url, X_test=X_test, y_test=y_test, train_ratio = 1,\
+#                                                                                                                                                    mymaxlag = mymaxlag, mydegs = mydegs, mynow = 1, steps = steps, plot = True)                     
+#                        
+#            
+#            if not ADAPTx: 
+#                print('The final state space model is fitted based on ' + matlab_params['method'][0] + ' using MATLAB.')
+#                selected_model = matlab_params['method'][0]
+#                yhat_test = matlab_y_predict_test.transpose()[:,0].reshape((-1,1))
+#                yhat_test = scaler_y.inverse_transform(yhat_test)
+#                
+#                fitting_result[selected_model] = {'model_hyper':matlab_params,'final_model':matlab_myresults, 'mse_train':matlab_MSE_train, 'mse_val':matlab_MSE_val, 'mse_test':matlab_MSE_test, 'yhat_train':matlab_y_predict_train, 'yhat_val':matlab_y_predict_val,'yhat_test':matlab_y_predict_test}
+#
+#                residual_analysis(X_test, y_test,yhat_test, alpha = alpha, round_number = round_number)
+#                print('--------------Analysis Is Done--------------')
+#                
+#            else:
+#                print('The final state space model is selected based on minimum averaged MSE.')
+#                if np.mean(matlab_MSE_train) <= np.mean(Adaptx_MSE_train):
+#                    print('State space model by Matlab is selected. Model parameters is stored in matlab_params.')
+#                    print('The final state space model is fitted based on ' + matlab_params['method'][0] + ' using MATLAB.')
+#                    selected_model = matlab_params['method'][0]
+#                    yhat_test = matlab_y_predict_test.transpose()[:,0].reshape((-1,1))
+#                    yhat_test = scaler_y.inverse_transform(yhat_test)
+#                    fitting_result[selected_model] = {'model_hyper':matlab_params,'final_model':matlab_myresults, 'mse_train':matlab_MSE_train, 'mse_val':matlab_MSE_val, 'mse_test':matlab_MSE_test, 'yhat_train':matlab_y_predict_train, 'yhat_val':matlab_y_predict_val,'yhat_test':matlab_y_predict_test}
+#
+#                    residual_analysis(X_test, y_test,yhat_test, alpha = alpha, round_number = round_number)
+#                    print('--------------Analysis Is Done--------------')
+#                    
+#                    
+#                else:
+#                    print('State space model by ADAPTx is selected. Model parameters is stored in Adaptx_optimal_params.')
+#                    selected_model = 'ADAPTx'
+#                    yhat_test = Adaptx_y_predict_test.transpose()[Adaptx_optimal_params['lag'][0][0]:,0].reshape((-1,1))
+#                    yhat_test = scaler_y.inverse_transform(yhat_test)                
+#                    fitting_result[selected_model] = {'model_hyper':Adaptx_optimal_params,'final_model':Adaptx_myresults, 'mse_train':Adaptx_MSE_train, 'mse_val':Adaptx_MSE_val, 'mse_test':Adaptx_MSE_test, 'yhat_train':Adaptx_y_predict_train, 'yhat_val':Adaptx_y_predict_val,'yhat_test':Adaptx_y_predict_test}
+#
+#                    residual_analysis(X_test[Adaptx_optimal_params['lag'][0][0]:,:], y_test[Adaptx_optimal_params['lag'][0][0]:,0].reshape((-1,1)),yhat_test, alpha = alpha, round_number = round_number)
+#                    print('--------------Analysis Is Done--------------')
+#
 
 def load_file(filename):
     """
-    Used by SPA to load datafiles
+    Used by SPA to load data files.
     """
     _, ext = splitext(filename)
     if ext == '.txt': # Assume is separated by space
@@ -976,8 +976,8 @@ def load_file(filename):
         my_file = read_csv(filename, header = None, sep = '\t').values
     elif ext in {'.xls', '.xlsx'}:
         my_file = read_excel(filename, header = None).values
-    else:
-        raise ValueError(f'Please provide a filename with extension in {.txt, .csv, .tsv, .xls, .xlsx}. You passed {filename}')
+    else: # TODO: JSON support?
+        raise ValueError(f'Please provide a filename with extension in {{.txt, .csv, .tsv, .xls, .xlsx}}. You passed {filename}')
     return my_file
 
 def run_cv_nondynamic(model_index, X_train, y_train, X_train_scaled, y_train_scaled, X_test, y_test, X_test_scaled, y_test_scaled,
@@ -996,10 +996,8 @@ def run_cv_nondynamic(model_index, X_train, y_train, X_train_scaled, y_train_sca
     """
     if for_validation:
         # For the sake of clarity
-        X_val = X_test
-        y_val = y_test
-        X_val_scaled = X_test_scaled
-        y_val_scaled = y_val_scaled
+        X_val, y_val = X_test, y_test
+        X_val_scaled, y_val_scaled = X_test_scaled, y_test_scaled
 
         if model_index == 'ALVEN':
             _, _, _, _, mse_val, _, _, _, _ = cv.CV_mse(model_index, X_train, y_train, X_val, y_val,
