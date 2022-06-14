@@ -1,6 +1,6 @@
 """
-Original work by Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com, available at https://github.com/vickysun5/SmartProcessAnalytics
-Modified by Pedro Seber
+Original work by Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com, https://github.com/vickysun5/SmartProcessAnalytics
+Modified by Pedro Seber, https://github.com/PedroSeber/SmartProcessAnalytics
 """
 import numpy as np
 import tensorflow as tf
@@ -153,15 +153,15 @@ def reset_graph():
     tf.reset_default_graph()
 
 # Define RNN graph
-def build_multilayer_rnn_graph_with_dynamic_rnn(cell_type, RNN_layers, activation, num_steps, input_size_x, input_size_y , learning_rate, lambda_l2_reg, random_seed = 0):
+def build_multilayer_rnn_graph_with_dynamic_rnn(cell_type, RNN_layers, activation, num_steps, x_num_features, y_num_features , learning_rate, lambda_l2_reg, random_seed = 0):
     reset_graph()
     tf.set_random_seed(random_seed) # For reproducibility
-    input_size_x += input_size_y
+    x_num_features += y_num_features
     
     # Graph inputs
     batch_size = tf.keras.Input([], dtype = tf.int32, name = 'batch_size') # TODO: test whether change to keras.Input was successful
-    x = tf.keras.Input([None, num_steps, input_size_x], dtype = tf.float32, name='x')
-    y = tf.keras.Input([None, num_steps, input_size_y], dtype = tf.float32, name='y')
+    x = tf.keras.Input([None, num_steps, x_num_features], dtype = tf.float32, name='x')
+    y = tf.keras.Input([None, num_steps, y_num_features], dtype = tf.float32, name='y')
     input_prob = tf.keras.Input(1, name='input_prob', dtype = tf.float32)
     state_prob = tf.keras.Input(1, name='state_prob', dtype = tf.float32)
     output_prob = tf.keras.Input(1, name='output_prob', dtype = tf.float32)
@@ -192,19 +192,19 @@ def build_multilayer_rnn_graph_with_dynamic_rnn(cell_type, RNN_layers, activatio
         return cell_drop
 
     # Create the full RNN and put it into a dropout wrapper
-    cell = tf.nn.rnn_cell.MultiRNNCell([get_a_cell(layer, input_prob, state_prob, input_size_x if layer == RNN_layers[0] else layer) for layer in RNN_layers])
-    cell = tf.nn.rnn_cell.DropoutWrapper(cell, variational_recurrent = True, dtype = tf.float32, input_size = input_size_x, output_keep_prob = output_prob)
+    cell = tf.nn.rnn_cell.MultiRNNCell([get_a_cell(layer, input_prob, state_prob, x_num_features if layer == RNN_layers[0] else layer) for layer in RNN_layers])
+    cell = tf.nn.rnn_cell.DropoutWrapper(cell, variational_recurrent = True, dtype = tf.float32, input_size = x_num_features, output_keep_prob = output_prob)
     init_state = cell.zero_state(batch_size, dtype = tf.float32)
     # Build dynamic graph
     rnn_outputs, final_state = tf.nn.dynamic_rnn(cell = cell, inputs = rnn_inputs, initial_state = init_state)
 
     # Final softmax for prediction
     with tf.variable_scope('softmax'):
-        W = tf.get_variable('W', [RNN_layers[-1], input_size_y])
-        b = tf.get_variable('b', [input_size_y], initializer = tf.constant_initializer(0.0))
+        W = tf.get_variable('W', [RNN_layers[-1], y_num_features])
+        b = tf.get_variable('b', [y_num_features], initializer = tf.constant_initializer(0.0))
     rnn_outputs = tf.reshape(rnn_outputs, [-1, RNN_layers[-1]])
     predictions = tf.matmul(rnn_outputs, W) + b
-    yy = tf.reshape(y, [-1, input_size_y])   # TODO: Should we have this double reshape here and in the MSE? 
+    yy = tf.reshape(y, [-1, y_num_features])   # TODO: Should we have this double reshape here and in the MSE?
     loss = tf.keras.metrics.mean_square_error(tf.reshape(predictions,[-1]), tf.reshape(yy,[-1]))
 
     # Adding regularization
@@ -221,7 +221,7 @@ def build_multilayer_rnn_graph_with_dynamic_rnn(cell_type, RNN_layers, activatio
                 total_loss = total_loss, loss = loss, train_step = train_step, preds = predictions, saver= tf.train.Saver())
     
 # Train RNN graph
-def train_rnn(raw_data_x, raw_data_y,  val_data_x, val_data_y, g, num_epochs, num_steps, batch_size, input_prob, output_prob, state_prob, epoch_before_val = 50,
+def train_rnn(raw_data_x, raw_data_y, val_data_x, val_data_y, g, num_epochs, num_steps, batch_size, input_prob, output_prob, state_prob, epoch_before_val = 50,
                 max_checks_without_progress = 50, epoch_overlap = None, verbose = True, save = False):
     with tf.Session() as sess:
         # initialize the variables
@@ -250,9 +250,8 @@ def train_rnn(raw_data_x, raw_data_y,  val_data_x, val_data_y, g, num_epochs, nu
                 training_loss_, training_state, _ = sess.run([g['loss'], g['final_state'], g['train_step']], feed_dict = feed_dict)
                 training_loss += training_loss_
 
-            if np.isnan(training_loss_): # TODO: change this
-                print('Explode!!!!!!!!!')
-                return (None, None, None)
+            if np.isnan(training_loss_):
+                raise ValueError(f'The training loss after epoch {steps} was NaN')
             if verbose and not(idx%100):
                 print(f"Average training loss for Epoch {idx}: {training_loss/(steps+1)}")
             training_losses.append(training_loss / (steps+1))
@@ -364,7 +363,7 @@ def train_rnn_multi(raw_data_x, raw_data_y, val_data_x, val_data_y, timeindex_tr
     return (training_losses,val_losses, int(parameter_num))
 
 # Test RNN graph 0 step
-def test_rnn(test_data_x,test_data_y, g, checkpoint, input_prob, output_prob, state_prob, num_test):
+def test_rnn(test_data_x, test_data_y, g, checkpoint, input_prob, output_prob, state_prob, num_test):
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
         test_data_yp = np.insert(test_data_y,0,0,axis=0)[:-1]
@@ -379,7 +378,7 @@ def test_rnn(test_data_x,test_data_y, g, checkpoint, input_prob, output_prob, st
     return (preds,loss,rnn_outputs)
 
 # Test RNN graph 0 step for multiplayer afterwards
-def test_rnn_layer(test_data_x,test_data_y, g, checkpoint, input_prob, output_prob, state_prob, num_test, num_layers):
+def test_rnn_layer(test_data_x, test_data_y, g, checkpoint, input_prob, output_prob, state_prob, num_test, num_layers):
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
         test_data_yp = np.insert(test_data_y,0,0,axis=0)[:-1]
@@ -412,7 +411,7 @@ def test_rnn_layer(test_data_x,test_data_y, g, checkpoint, input_prob, output_pr
     return (final_preds, loss, final_inter_state)
 
 # Test RNN graph single layer
-def test_rnn_kstep(test_data_x,test_data_y, preds, rnn_outputs, g, checkpoint, input_prob, output_prob, state_prob, num_test, kstep = 3):
+def test_rnn_kstep(test_data_x, test_data_y, preds, rnn_outputs, g, checkpoint, input_prob, output_prob, state_prob, num_test, kstep = 3):
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
         result = {}
@@ -429,7 +428,7 @@ def test_rnn_kstep(test_data_x,test_data_y, preds, rnn_outputs, g, checkpoint, i
     return (result,losses)
 
 # Test RNN graph multi layer
-def test_rnn_kstep_layer(test_data_x,test_data_y, preds, rnn_outputs, g, checkpoint, input_prob, output_prob, state_prob, num_test,  kstep = 3):
+def test_rnn_kstep_layer(test_data_x, test_data_y, preds, rnn_outputs, g, checkpoint, input_prob, output_prob, state_prob, num_test, kstep = 3):
     with tf.Session() as sess:
         sess.run(tf.global_variables_initializer())
         result= {}
