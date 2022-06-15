@@ -28,9 +28,9 @@ tf.set_random_seed(seed_value)
 
 
 def timeseries_RNN_feedback_single_train(X_train, y_train, X_val = None, y_val = None, X_test = None, y_test = None, val_ratio = 0.2, cell_type = 'basic', activation = 'tanh',
-                                            RNN_layers = [512, 256], batch_size = 1, epoch_overlap = None, num_steps = 10, learning_rate = 1e-3, lambda_l2_reg = 1e-3,
+                                            RNN_layers = None, batch_size = 1, epoch_overlap = None, num_steps = 10, learning_rate = 1e-3, lambda_l2_reg = 1e-3,
                                             num_epochs = 200, input_prob = 0.95, output_prob = 0.95, state_prob = 0.95, input_prob_test = 1, output_prob_test = 1,
-                                            state_prob_test = 1, max_checks_without_progress = 100, epoch_before_val = 50, save_location = 'RNN_feedback_0', plot = False):
+                                            state_prob_test = 1, max_checks_without_progress = 50, epoch_before_val = 50, save_location = 'RNN_feedback_0', plot = False):
     """
     Fits an RNN_feedback model to training data, using validation data for early stopping.
     Test data, if given, are used to choose the hyperparameters.
@@ -54,9 +54,10 @@ def timeseries_RNN_feedback_single_train(X_train, y_train, X_val = None, y_val =
         RNN cell used. Should be LSTM, GRU, or basic.
     activation: str, optional, default = 'tanh'
         NN activation function. Should be relu, tanh, sigmoid, or linear.
-    RNN_layers : array, optional, default = [512, 256]
+    RNN_layers : array, optional, default = None
         An array with the number of neurons in each layer.
         The length of this array is the number of hidden layers.
+        If None, is automatically set to [X_train.shape[1]] = m.
     batch_size : int, optional, default = 1
         Batch size used when training the RNN.
     epoch_overlap : None or int, optional, default = None
@@ -74,7 +75,7 @@ def timeseries_RNN_feedback_single_train(X_train, y_train, X_val = None, y_val =
         The keep probability for dropout during training.
     input_prob_test, output_prob_test, state_prob_test : floats between 0 and 1, optional, default = 1
         The keep probability for dropout during testing.
-    max_chekcs_without_progress: int, optional, default = 100
+    max_checks_without_progress: int, optional, default = 50
         Maximum number of epochs without validation error improvement before early stopping.
     epoch_before_val: int, optional, default = 50
         Minimum number of epochs before using validation set to early stop.
@@ -86,12 +87,14 @@ def timeseries_RNN_feedback_single_train(X_train, y_train, X_val = None, y_val =
 
     # Load and pre-process the data
     if X_val is None:
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size = val_ratio) 
+        X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size = val_ratio)
     num_train = X_train.shape[0]
     if X_test is not None:
         num_test = X_test.shape[0]
     x_num_features = X_train.shape[1]
     y_num_features = y_train.shape[1]
+    if RNN_layers is None:
+        RNN_layers = [x_num_features]
 
     scaler = StandardScaler()
     scaler.fit(X_train)
@@ -165,9 +168,9 @@ def timeseries_RNN_feedback_single_train(X_train, y_train, X_val = None, y_val =
     return (prediction_train, prediction_val, prediction_test, (AIC,AICc,BIC), train_loss_final, val_loss_final, test_loss_final)
 
 def timeseries_RNN_feedback_multi_train(X_train, y_train, timeindex_train, X_val = None, y_val = None, timeindex_val = None, X_test = None, y_test = None, val_ratio = 0.2,
-                                            cell_type = 'basic', activation = 'tanh', RNN_layers = [512, 256], batch_size = 1, epoch_overlap = None, num_steps = 10,
+                                            cell_type = 'basic', activation = 'tanh', RNN_layers = None, batch_size = 1, epoch_overlap = None, num_steps = 10,
                                             learning_rate = 1e-3, lambda_l2_reg = 1e-3, num_epochs = 200, input_prob = 0.95, output_prob = 0.95, state_prob = 0.95,
-                                            input_prob_test = 1, output_prob_test = 1, state_prob_test = 1, max_checks_without_progress = 100, epoch_before_val = 50,
+                                            input_prob_test = 1, output_prob_test = 1, state_prob_test = 1, max_checks_without_progress = 50, epoch_before_val = 50,
                                             save_location = 'RNN_feedback_0', plot = False):
     """
     Fits an RNN_feedback model to training data, using validation data for early stopping.
@@ -197,9 +200,10 @@ def timeseries_RNN_feedback_multi_train(X_train, y_train, timeindex_train, X_val
         RNN cell used. Should be LSTM, GRU, or basic.
     activation: str, optional, default = 'tanh'
         NN activation function. Should be relu, tanh, sigmoid, or linear.
-    RNN_layers : array, optional, default = [512, 256]
+    RNN_layers : array, optional, default = None
         An array with the number of neurons in each layer.
         The length of this array is the number of hidden layers.
+        If None, is automatically set to [X_train.shape[1]] = m.
     batch_size : int, optional, default = 1
         Batch size used when training the RNN.
     epoch_overlap : None or int, optional, default = None
@@ -217,7 +221,7 @@ def timeseries_RNN_feedback_multi_train(X_train, y_train, timeindex_train, X_val
         The keep probability for dropout during training.
     input_prob_test, output_prob_test, state_prob_test : floats between 0 and 1, optional, default = 1
         The keep probability for dropout during testing.
-    max_chekcs_without_progress: int, optional, default = 100
+    max_checks_without_progress: int, optional, default = 100
         Maximum number of epochs without validation error improvement before early stopping.
     epoch_before_val: int, optional, default = 50
         Minimum number of epochs before using validation set to early stop.
@@ -236,6 +240,8 @@ def timeseries_RNN_feedback_multi_train(X_train, y_train, timeindex_train, X_val
         num_test = X_test.shape[0]
     x_num_features = X_train.shape[1]
     y_num_features = y_train.shape[1]
+    if RNN_layers is None:
+        RNN_layers = [x_num_features]
 
     scaler = StandardScaler()
     scaler.fit(X_train)
@@ -327,7 +333,7 @@ def timeseries_RNN_feedback_multi_train(X_train, y_train, timeindex_train, X_val
     
     return (prediction_train, prediction_val, prediction_test, (AIC,AICc,BIC), train_loss_final, val_loss_final, test_loss_final)
 
-def timeseries_RNN_feedback_test(X_train, y_train, X_test, y_test, kstep = 1, cell_type = 'basic', activation = 'tanh', RNN_layers = [512, 256],
+def timeseries_RNN_feedback_test(X_train, y_train, X_test, y_test, kstep = 1, cell_type = 'basic', activation = 'tanh', RNN_layers = None,
                                         input_prob_test = 1, output_prob_test = 1, state_prob_test = 1, save_location = 'RNN_feedback_0', plot = False):
     """
     TODO: documentation   
@@ -346,9 +352,10 @@ def timeseries_RNN_feedback_test(X_train, y_train, X_test, y_test, kstep = 1, ce
         RNN cell used. Should be LSTM, GRU, or basic.
     activation: str, optional, default = 'tanh'
         NN activation function. Should be relu, tanh, sigmoid, or linear.
-    RNN_layers : array, optional, default = [512, 256]
+    RNN_layers : array, optional, default = None
         An array with the number of neurons in each layer.
         The length of this array is the number of hidden layers.
+        If None, is automatically set to [X_train.shape[1]] = m.
     input_prob_test, output_prob_test, state_prob_test : floats between 0 and 1, optional, default = 1
         The keep probability for dropout during testing.
     save_location: str, optional, default = 'RNN_feedback_0'
@@ -359,6 +366,8 @@ def timeseries_RNN_feedback_test(X_train, y_train, X_test, y_test, kstep = 1, ce
     # Load and pre-process the data
     x_num_features = X_train.shape[1]
     y_num_features = y_train.shape[1]
+    if RNN_layers is None:
+        RNN_layers = [x_num_features]
 
     scaler = StandardScaler()
     scaler.fit(X_train)
@@ -398,9 +407,9 @@ def timeseries_RNN_feedback_test(X_train, y_train, X_test, y_test, kstep = 1, ce
         s = 12
         
         if X.shape[0] == X_test.shape[0] and np.sum(X - X_test) < 1e-4:
-            name = 'Train' +round_number
+            name = 'Train'
         else: 
-            name = 'Test' + round_number
+            name = 'Test'
             
         #plot the prediction vs real
         for i in range(kstep+1):
