@@ -1,17 +1,9 @@
-# -*- coding: utf-8 -*-
 """
-Created on Thu Feb 20 20:03:24 2020
-
-@author: Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com
-(c) 2020 Weike Sun, all rights reserved
+Original work by Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com, https://github.com/vickysun5/SmartProcessAnalytics
+Modified by Pedro Seber, https://github.com/PedroSeber/SmartProcessAnalytics
 """
-
-
 import numpy as np
-from sklearn.model_selection import KFold
-from sklearn.model_selection import RepeatedKFold
-from sklearn.model_selection import ShuffleSplit
-from sklearn.model_selection import TimeSeriesSplit
+from sklearn.model_selection import KFold, RepeatedKFold, ShuffleSplit, TimeSeriesSplit, GroupKFold, GroupShuffleSplit
 import regression_models as rm
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.linear_model import Ridge
@@ -19,129 +11,106 @@ import nonlinear_regression as nr
 from sklearn.model_selection import train_test_split
 import nonlinear_regression_other as nro
 from sklearn.feature_selection import VarianceThreshold
-#import timeit
 
+def CVpartition(X, y, Type = 'Re_KFold', K = 5, Nr = 10, random_state = 0, group = None):
+    """
+    Partitions data for cross-validation and bootstrapping.
+    Returns a generator with the split data.
 
-
-def CVpartition(X, y, Type = 'Re_KFold', K = 10, Nr = 1000, random_state = 0, group = None):
-    '''This function create partition for data for cross validation and bootstrap
-    https://scikit-learn.org/stable/modules/cross_validation.html
-    
-    Input:
-    X: independent variables of size N x m np_array
-    y: dependent variable of size N x 1 np_array
-    type: 'KFold', 'Re_KFold', 'MC' for cross validation
-          'TS' for time series cross validation
-          
-    K: float, 1/K portion of data will be used as validation set, default 10
-    Output:partitioned data set
-    Nr: Number of repetitions, ignored whtn CV_type = 'KFold', for Re_KFold, it will be Nr * K total
-    group: group index for grouped CV
-    
-    Output:generator (X_train, y_train, X_val, y_val)
-    '''
-    
+    Parameters
+    ----------
+    model_name : str
+        Which model to use
+    X, y : Numpy array with shape N x m, N x 1
+        Training data predictors and response.
+    Type : str, optional, default = 'Re_KFold'
+        Which cross validation method to use.
+    K : int, optional, default = 5
+        Number of folds used in cross validation.
+    Nr : int, optional, default = 10
+        Number of CV repetitions used when cv_type in {'MC', 'Re_KFold', 'GroupShuffleSplit'}.
+    random_state : int, optional, default = 0
+        Seed used for the random number generator.
+    group : list, optional, default = None
+        Group indices for grouped CV methods.
+    """
     if Type == 'MC':
-        CV = ShuffleSplit(n_splits=Nr, test_size=1/K, random_state =random_state)
-        for train_index, val_index in CV.split(X,y):
+        CV = ShuffleSplit(n_splits = Nr, test_size = 1/K, random_state = random_state)
+        for train_index, val_index in CV.split(X, y):
             yield (X[train_index], y[train_index], X[val_index], y[val_index])
-            
     elif Type == 'Single':
-        X, X_test, y, y_test = train_test_split(X, y, test_size=1/K, random_state =random_state)
-        yield (X, y ,X_test, y_test)
-
+        X, X_test, y, y_test = train_test_split(X, y, test_size = 1/K, random_state = random_state)
+        yield (X, y, X_test, y_test)
     elif Type == 'KFold':
-        CV = KFold(n_splits = int(K), random_state =random_state)
-        for train_index, val_index in CV.split(X,y):
+        CV = KFold(n_splits = int(K), random_state = random_state)
+        for train_index, val_index in CV.split(X, y):
             yield (X[train_index], y[train_index], X[val_index], y[val_index])
-        
     elif Type == 'Re_KFold':
-        CV = RepeatedKFold(n_splits= int(K), n_repeats= Nr, random_state =random_state)
-        for train_index, val_index in CV.split(X,y):
+        CV = RepeatedKFold(n_splits = int(K), n_repeats = Nr, random_state = random_state)
+        for train_index, val_index in CV.split(X, y):
             yield (X[train_index], y[train_index], X[val_index], y[val_index])
-            
     elif Type == 'Timeseries':
-        TS = TimeSeriesSplit(n_splits=int(K))
+        TS = TimeSeriesSplit(n_splits = int(K))
         for train_index, val_index in TS.split(X):
             yield (X[train_index], y[train_index], X[val_index], y[val_index])    
-    
-    
     elif Type == 'Single_group':
-    #the repliates should have the same group indicator
-    #the size of indicator indicates the range of DOE
-        label =np.unique(group)
+        label = np.unique(group)
         num = int(len(label)/K)
-        final_list =  np.squeeze(group == label[0])
-        for i in range(1,num):
+        final_list = np.squeeze(group == label[0])
+        for i in range(1, num):
             final_list = final_list | np.squeeze(group == label[i])
-            
-        yield(X[~final_list], y[~final_list], X[final_list],y[final_list])
-
-
-
+        yield(X[~final_list], y[~final_list], X[final_list], y[final_list])
     elif Type == 'Group':
-        #the repliates should have the same group indicator
-        #the size of indicator indicates the range of DOE
-        label =np.unique(group)
-        print('***** '+str(len(label))+' fold is used for CV ******')
+        label = np.unique(group)
         for i in range(len(label)):
-            yield(X[np.squeeze(group != label[i])], y[np.squeeze(group != label[i])], X[np.squeeze(group == label[i])],y[np.squeeze(group == label[i])])
-
+            yield(X[np.squeeze(group != label[i])], y[np.squeeze(group != label[i])], X[np.squeeze(group == label[i])], y[np.squeeze(group == label[i])])
     elif Type == 'Group_no_extrapolation':
-        #for no extrapolation case, 
-        label =np.unique(group)
-        print('***** '+str(len(label)-2)+' fold is used for CV ******')
+        label = np.unique(group)
         for i in range(len(label)):
-            if min(label)<label[i] and label[i]<max(label):
-                yield(X[np.squeeze(group != label[i])], y[np.squeeze(group != label[i])], X[np.squeeze(group == label[i])],y[np.squeeze(group == label[i])])
-   
+            if min(label) < label[i] and label[i] < max(label):
+                yield(X[np.squeeze(group != label[i])], y[np.squeeze(group != label[i])], X[np.squeeze(group == label[i])], y[np.squeeze(group == label[i])])
     elif Type == 'GroupKFold':
-        from sklearn.model_selection import GroupKFold
         gkf = GroupKFold(n_splits = int(K))
-        print('using Group Kfold')
-        for train_index, val_index in gkf.split(X, y, groups=group):
+        for train_index, val_index in gkf.split(X, y, groups = group):
             yield (X[train_index], y[train_index], X[val_index], y[val_index])    
-
     elif Type == 'GroupShuffleSplit':
-        from sklearn.model_selection import GroupShuffleSplit
-        gss = GroupShuffleSplit(n_splits = int(Nr), test_size = 1/K, random_state=random_state)
-        for train_index, val_index in gss.split(X, y, groups=group):
+        gss = GroupShuffleSplit(n_splits = int(Nr), test_size = 1 / K, random_state = random_state)
+        for train_index, val_index in gss.split(X, y, groups = group):
             yield (X[train_index], y[train_index], X[val_index], y[val_index])    
-    
     elif Type == 'No_CV':
-        yield (X,y,X,y)
-    
+        yield (X, y, X, y)
     elif Type == 'Single_ordered':
         num = X.shape[0]
-        yield (X[:num-round(X.shape[0]*1/K):], y[:num-round(X.shape[0]*1/K):] , X[num-round(X.shape[0]*1/K):], y[num-round(X.shape[0]*1/K):])        
-        
+        yield (X[:num-round(X.shape[0]*1/K):], y[:num-round(X.shape[0]*1/K):], X[num-round(X.shape[0]*1/K):], y[num-round(X.shape[0]*1/K):])        
     else:
         print('Wrong type specified for data partition')
 
+def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, Nr = 1000, eps = 1e-4, alpha_num = 20, group = None, round_number = '', **kwargs):
+    """
+    Determines the best hyperparameters using MSE based on information criteria.
+    Also returns MSE and yhat data for the chosen model.
 
-
-def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 10, Nr = 1000, eps = 1e-4,alpha_num=50, group = None, round_number = '', **kwargs):
-    '''This function determines the best hyper_parameter using mse based on CV
-    Input:
-    model_name: str, indicating which model to use
-    X: independent variables of size N x m np_array
-    y: dependent variable of size N x 1 np_array
-    cv_type: cross_validation type
-    K: fold for CV
-    Nr: repetition for CV
-    **kwargs: hyper-parameters for model fitting, if None, using default range or settings
-    
-    
-    Output: 
-    hyper_params: dictionary, contains optimal model parameters based on cross validation
-    model: final fited model on all training data
-    model_params: np_array m x 1
-    mse_train
-    mse_test
-    yhat_train
-    yhat_test
-    '''
-    
+    Parameters
+    ----------
+    model_name : str
+        Which model to use
+    X, y : Numpy array with shape N x m, N x 1
+        Training data predictors and response.
+    X_test, y_test : Numpy array with shape N_test x m, N_test x 1
+        Testing data predictors and response.
+    cv_type : str, optional, default = None
+        Which cross validation method to use.
+    K_fold : int, optional, default = 5
+        Number of folds used in cross validation.
+    Nr : int, optional, default = 10
+        Number of CV repetitions used when cv_type in {'MC', 'Re_KFold', 'GroupShuffleSplit'}.
+    eps : float, optional, default = 1e-4
+        Tolerance. TODO: expand on this.
+    alpha_num : int, optional, default = 20
+        Penalty weight used when model_name in {'RR', 'EN', 'ALVEN', 'DALVEN', 'DALVEN_full_nonlinear'}.
+    **kwargs : dict, optional
+        Non-default hyperparameters for model fitting.
+    """
     if model_name == 'EN':
         EN = rm.model_getter(model_name)
         
@@ -1055,126 +1024,92 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 10, 
 
         return(hyper_params, DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_result[ind], list_name_final)
 
-
-
-    ########################################################################################################################################   
-    #for RNN, only the model archetecture is viewed as hyper-parameter in thie automated version, the other training parameters can be set by kwargs, otw the default value will be used
-
-
     elif model_name == 'RNN':
         import timeseries_regression_RNN as RNN
-
         input_size_x = X.shape[1]
-        
-        #currently not support BRNN version, so keep test at 1
-        input_prob_test = 1
-        output_prob_test = 1
-        state_prob_test = 1
-        
-        #model architecture (which is also hyperparameter for selection)
-        if 'cell_type' not in kwargs:
-            kwargs['cell_type'] = 'e'
-        if 'activation' not in kwargs:
-            kwargs['activation'] = ['tanh'] #can be relu, tanh,  linear
-        if 'state_size' not in kwargs:
-            kwargs['state_size'] = [input_size_x*(i+1) for i in range(5)]
-        if 'num_layers' not in kwargs:
-            kwargs['num_layers'] = [1, 2, 3]
-        
 
-        #training parameters
+        # Model architecture
+        if 'cell_type' not in kwargs:
+            kwargs['cell_type'] = ['basic']
+        if 'activation' not in kwargs:
+            kwargs['activation'] = ['tanh']
+        if 'RNN_layers' not in kwargs:
+            kwargs['RNN_layers'] = [input_size_x]
+
+        # Training parameters
         if 'batch_size' not in kwargs:
-            kwargs['batch_size'] = 2
+            kwargs['batch_size'] = 1
         if 'epoch_overlap' not in kwargs:
-            kwargs['epoch_overlap'] = 0
+            kwargs['epoch_overlap'] = None
         if 'num_steps' not in kwargs:
-            kwargs['num_steps'] = 25
+            kwargs['num_steps'] = 10
         if 'learning_rate' not in kwargs:
-            kwargs['learning_rate'] = 1e-2
+            kwargs['learning_rate'] = 1e-3
         if 'lambda_l2_reg' not in kwargs:
             kwargs['lambda_l2_reg'] = 1e-3
         if 'num_epochs' not in kwargs:
-            kwargs['num_epochs'] = 1000
-  
-       #drop-out parameters for training
-
+            kwargs['num_epochs'] = 200
+        # Dropout parameters
         if 'input_prob' not in kwargs:
-            kwargs['input_prob'] = 1
+            kwargs['input_prob'] = 0.95
         if 'output_prob' not in kwargs:
-            kwargs['output_prob'] = 1
+            kwargs['output_prob'] = 0.95
         if 'state_prob' not in kwargs:
-            kwargs['state_prob'] = 1
-        
+            kwargs['state_prob'] = 0.95
+        # Currently we do not support BRNNs, so always keep all neurons during test
+        input_prob_test = 1
+        output_prob_test = 1
+        state_prob_test = 1
 
-        #early stop parameter
-        if 'train_ratio' not in kwargs:
-            kwargs['train_ratio'] = 0.85
-
+        # Early stopping
+        if 'val_ratio' not in kwargs and X_val is None:
+            kwargs['val_ratio'] = 0.2
+        else:
+            kwards['val_ratio'] = 0
         if 'max_checks_without_progress' not in kwargs:
-            kwargs['max_checks_without_progress'] = 100
+            kwargs['max_checks_without_progress'] = 50
         if 'epoch_before_val' not in kwargs:
-            kwargs['epoch_before_val'] = int(kwargs['num_epochs']*0.2)
-        
-        
-        #save or not
-        if 'location' not in kwargs:
-            kwargs['location'] = 'RNNtest'
-        
+            kwargs['epoch_before_val'] = 50
+
+        if 'save_location' not in kwargs:
+            kwargs['save_location'] = 'RNN_feedback_0'
+        if 'plot' not in kwargs:
+            kwargs['plot'] = False
                 
-                
-        MSE_result = np.zeros((len(kwargs['cell_type']),len(kwargs['activation']), len(kwargs['state_size']), len(kwargs['num_layers'])))
+        MSE_result = np.zeros( (len(kwargs['cell_type']), len(kwargs['activation']), len(kwargs['RNN_layers'])) )
         
-        counter = 0
-        for X_train, y_train, X_val, y_val in CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group):
-            counter += 1
+        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, cv_type, K_fold, Nr, group = group)):
             for i in range(len(kwargs['cell_type'])):
                 for j in range(len(kwargs['activation'])):
-                    for k in range(len(kwargs['state_size'])):
-                        for t in range(len(kwargs['num_layers'])):
-                            _,_, _, _, _, _, test_loss = RNN.timeseries_RNN_feedback_single_train(X_train, y_train, X_test=X_val, Y_test=y_val, train_ratio = kwargs['train_ratio'],\
-                                                                                             cell_type=kwargs['cell_type'][i],activation = kwargs['activation'][j], state_size = kwargs['state_size'][k],\
-                                                                                             batch_size = kwargs['batch_size'], epoch_overlap = kwargs['epoch_overlap'],num_steps = kwargs['num_steps'],\
-                                                                                             num_layers = kwargs['num_layers'][t], learning_rate = kwargs['learning_rate'],  lambda_l2_reg=kwargs['lambda_l2_reg'],\
-                                                                                             num_epochs = kwargs['num_epochs'], input_prob = kwargs['input_prob'], output_prob = kwargs['output_prob'], state_prob = kwargs['state_prob'],\
-                                                                                             input_prob_test =input_prob_test, output_prob_test = output_prob_test, state_prob_test =state_prob_test,\
-                                                                                             max_checks_without_progress = kwargs['max_checks_without_progress'],epoch_before_val=kwargs['epoch_before_val'], location= kwargs['location'], plot= False)
+                    for k in range(len(kwargs['RNN_layers'])):
+                        _, _, _, _, _, val_loss, _ = RNN.timeseries_RNN_feedback_single_train(X, y, X_val, y_val, None, None, kwargs['val_ratio'], kwargs['cell_type'][i],
+                                kwargs['activation'][j], kwargs['RNN_layers'][k], kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'],
+                                kwargs['lambda_l2_reg'], kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test,
+                                output_prob_test, state_prob_test, kwargs['max_checks_without_progress'], kwargs['epoch_before_val'], kwargs['save_location'], plot = False)
                             
-                            MSE_result[i,j,k,t] += test_loss
+                        MSE_result[i, j, k] += val_loss
                                 
-        MSE_result = MSE_result/counter
+        MSE_result = MSE_result / (counter+1)
     
-        #find the min value, if there is a tie, only the first occurence is returned, and fit the final model
+        # Min IC value (first occurrence)
         ind = np.unravel_index(np.argmin(MSE_result, axis=None), MSE_result.shape)
         cell_type = kwargs['cell_type'][ind[0]]
         activation = kwargs['activation'][ind[1]]
-        state_size = kwargs['state_size'][ind[2]]
-        num_layers = kwargs['num_layers'][ind[3]]
+        RNN_layers = kwargs['RNN_layers'][ind[2]]
        
-        print('Final training')
-        prediction_train,prediction_val, prediction_test, _, train_loss_final, val_loss_final, test_loss_final = RNN.timeseries_RNN_feedback_single_train(X, y, X_test=X_test, Y_test=y_test, train_ratio = kwargs['train_ratio'],\
-                                                                                         cell_type=cell_type,activation = activation , state_size = state_size,\
-                                                                                         batch_size = kwargs['batch_size'], epoch_overlap = kwargs['epoch_overlap'],num_steps = kwargs['num_steps'],\
-                                                                                         num_layers = num_layers, learning_rate = kwargs['learning_rate'],  lambda_l2_reg=kwargs['lambda_l2_reg'],\
-                                                                                         num_epochs = kwargs['num_epochs'], input_prob = kwargs['input_prob'], output_prob = kwargs['output_prob'], state_prob = kwargs['state_prob'],\
-                                                                                         input_prob_test =input_prob_test, output_prob_test = output_prob_test, state_prob_test =state_prob_test,\
-                                                                                         max_checks_without_progress = kwargs['max_checks_without_progress'],epoch_before_val=kwargs['epoch_before_val'], location= kwargs['location'], plot= True,round_number = round_number)
+        prediction_train, prediction_val, prediction_test, _, train_loss_final, val_loss_final, test_loss_final = RNN.timeseries_RNN_feedback_single_train(X, y, None, None, X_test, y_test,
+                kwargs['val_ratio'], cell_type, activation, RNN_layers, kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'], kwargs['lambda_l2_reg'],
+                kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test, output_prob_test, state_prob_test, kwargs['max_checks_without_progress'],
+                kwargs['epoch_before_val'], kwargs['save_location'], plot = kwargs['plot'])
 
-        
-        hyper_params = {}
-        hyper_params['cell_type'] = cell_type
-        hyper_params['activation'] = activation
-        hyper_params['state_size'] = state_size
-        hyper_params['num_layers'] = num_layers
-        hyper_params['training_params'] = {'batch_size':kwargs['batch_size'],'epoch_overlap':kwargs['epoch_overlap'],'num_steps':kwargs['num_steps'],'learning_rate':kwargs['learning_rate'],'lambda_l2_reg':kwargs['lambda_l2_reg'],'num_epochs':kwargs['num_epochs']}
-        hyper_params['drop_out'] = {'input_prob':kwargs['input_prob'],'output_prob':kwargs['output_prob'], 'state_prob':kwargs['state_prob']}
-        hyper_params['early_stop'] = {'train_ratio':kwargs['train_ratio'], 'max_checks_without_progress':kwargs['max_checks_without_progress'],'epoch_before_val':kwargs['epoch_before_val']}
-        hyper_params['MSE_val'] = MSE_result[ind]
-        
-        
-        return(hyper_params, kwargs['location'], prediction_train, prediction_val, prediction_test, train_loss_final, val_loss_final, test_loss_final)
-
-
-
-
-
+        hyperparams = {}
+        hyperparams['cell_type'] = cell_type
+        hyperparams['activation'] = activation
+        hyperparams['RNN_layers'] = RNN_layers
+        hyperparams['training_params'] = {'batch_size': kwargs['batch_size'], 'epoch_overlap': kwargs['epoch_overlap'], 'num_steps': kwargs['num_steps'], 'learning_rate': kwargs['learning_rate'],
+                                        'lambda_l2_reg': kwargs['lambda_l2_reg'], 'num_epochs': kwargs['num_epochs']}
+        hyperparams['drop_out'] = {'input_prob': kwargs['input_prob'], 'output_prob': kwargs['output_prob'], 'state_prob': kwargs['state_prob']}
+        hyperparams['early_stop'] = {'val_ratio': kwargs['val_ratio'], 'max_checks_without_progress': kwargs['max_checks_without_progress'], 'epoch_before_val': kwargs['epoch_before_val']}
+        hyperparams['MSE_val'] = MSE_result[ind]
+        return(hyperparams, kwargs['save_location'], prediction_train, prediction_val, prediction_test, train_loss_final, val_loss_final, test_loss_final)
 
