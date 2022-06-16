@@ -27,8 +27,8 @@ def IC_mse(model_name, X, y, X_test, y_test, X_val = None, y_val = None, cv_type
     cv_type : str, optional, default = None
         The information criterion used for cross-validation.
         One of {'BIC', 'AIC', 'AICc'}. If None, 'AIC' or 'AICc' is used based on X data size.
-    alpha_num : int, optional, default = 50
-        Penalty weight used when model_name in {'RR', 'EN', 'ALVEN', 'DALVEN'}.
+    alpha_num : int, optional, default = 20
+        Penalty weight used when model_name in {'RR', 'EN', 'ALVEN', 'DALVEN', 'DALVEN_full_nonlinear'}.
     eps : float, optional, default = 1e-4
         Tolerance. TODO: expand on this.
     **kwargs : dict, optional
@@ -75,9 +75,9 @@ def IC_mse(model_name, X, y, X_test, y_test, X_val = None, y_val = None, cv_type
         degree = kwargs['degree'][ind[0]]
         l1_ratio = kwargs['l1_ratio'][ind[2]]
         lag = kwargs['lag'][ind[3]]
-        DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index, _ = DALVEN(X,y, X_test, y_test, alpha = ind[1], l1_ratio = l1_ratio,
-                                                                                           degree = degree, lag = lag, tol = eps, alpha_num = alpha_num, cv = False,
-                                                                                           selection = 'p_value', select_value = kwargs['select_pvalue'], trans_type = kwargs['trans_type'])
+        DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index, _ = DALVEN(X, y, X_test, y_test, alpha = ind[1], l1_ratio = l1_ratio,
+                                                                           degree = degree, lag = lag, tol = eps, alpha_num = alpha_num, cv = False,
+                                                                           selection = 'p_value', select_value = kwargs['select_pvalue'], trans_type = kwargs['trans_type'])
         hyperparams = {}
         hyperparams['alpha'] = alpha
         hyperparams['l1_ratio'] = l1_ratio
@@ -164,7 +164,6 @@ def IC_mse(model_name, X, y, X_test, y_test, X_val = None, y_val = None, cv_type
             list_name_final =  []
         return(hyperparams, DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, IC_result[ind], list_name_final)
 
-    # For RNN, only the model archetecture is viewed as hyper-parameter in thie automated version, the other training parameters can be set by kwargs, otw the default value will be used
     elif model_name == 'RNN':
         input_size_x = X.shape[1]
         
@@ -217,15 +216,13 @@ def IC_mse(model_name, X, y, X_test, y_test, X_val = None, y_val = None, cv_type
             kwargs['plot'] = False
         
         IC_result = np.zeros( (len(kwargs['cell_type']), len(kwargs['activation']), len(kwargs['RNN_layers'])) )
-        Result = {}
-        
         for i in range(len(kwargs['cell_type'])):
             for j in range(len(kwargs['activation'])):
                 for k in range(len(kwargs['RNN_layers'])):
-                    p_train, p_val, p_test, (AIC,AICc,BIC), train_loss, val_loss, test_loss = RNN.timeseries_RNN_feedback_single_train(X, y, X_val, y_val, X_test, y_test, kwargs['val_ratio'],
-                            kwargs['cell_type'][i], kwargs['activation'][j], kwargs['RNN_layers'][k], kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'],
-                            kwargs['lambda_l2_reg'], kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test, output_prob_test, state_prob_test,
-                            kwargs['max_checks_without_progress'], kwargs['epoch_before_val'], kwargs['location'], plot = False)
+                    _, _, _, (AIC,AICc,BIC), _, _, _ = RNN.timeseries_RNN_feedback_single_train(X, y, X_val, y_val, None, None, kwargs['val_ratio'], kwargs['cell_type'][i],
+                                kwargs['activation'][j], kwargs['RNN_layers'][k], kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'],
+                                kwargs['lambda_l2_reg'], kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test,
+                                output_prob_test, state_prob_test, kwargs['max_checks_without_progress'], kwargs['epoch_before_val'], kwargs['save_location'], plot = False)
                         if cv_type == 'AICc': # TODO: change to just = instead of += ?
                             IC_result[i,j,k] += AICc
                         elif cv_type == 'BIC':
@@ -233,20 +230,16 @@ def IC_mse(model_name, X, y, X_test, y_test, X_val = None, y_val = None, cv_type
                         else:
                             IC_result[i,j,k] += AIC
                             
-                        Result[(i,j,k)] = {'prediction_train': p_train, 'prediction_val': p_val, 'prediction_test': p_test,
-                                            'train_loss_final': train_loss, 'val_loss_final': val_loss, 'test_loss_final': test_loss}
-        
         # Min IC value (first occurrence)
         ind = np.unravel_index(np.argmin(IC_result, axis=None), IC_result.shape)
         cell_type = kwargs['cell_type'][ind[0]]
         activation = kwargs['activation'][ind[1]]
         RNN_layers = kwargs['RNN_layers'][ind[2]]
        
-        Final = Result[(ind[0],ind[1],ind[2])]
         prediction_train, prediction_val, prediction_test, AICs, train_loss_final, val_loss_final, test_loss_final = RNN.timeseries_RNN_feedback_single_train(X, y, X_val, y_val, X_test, y_test,
                 kwargs['val_ratio'], cell_type, activation, RNN_layers, kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'], kwargs['lambda_l2_reg'],
                 kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test, output_prob_test, state_prob_test, kwargs['max_checks_without_progress'],
-                kwargs['epoch_before_val'], kwargs['location'], plot = False)
+                kwargs['epoch_before_val'], kwargs['save_location'], kwargs['plot'])
         
         hyperparams = {}
         hyperparams['cell_type'] = cell_type
@@ -255,7 +248,7 @@ def IC_mse(model_name, X, y, X_test, y_test, X_val = None, y_val = None, cv_type
         hyperparams['training_params'] = {'batch_size': kwargs['batch_size'], 'epoch_overlap': kwargs['epoch_overlap'], 'num_steps': kwargs['num_steps'], 'learning_rate': kwargs['learning_rate'],
                                         'lambda_l2_reg': kwargs['lambda_l2_reg'], 'num_epochs': kwargs['num_epochs']}
         hyperparams['drop_out'] = {'input_prob': kwargs['input_prob'], 'output_prob': kwargs['output_prob'], 'state_prob': kwargs['state_prob']}
-        hyperparams['early_stop'] = {'train_ratio': kwargs['train_ratio'], 'max_checks_without_progress': kwargs['max_checks_without_progress'], 'epoch_before_val': kwargs['epoch_before_val']}
+        hyperparams['early_stop'] = {'val_ratio': kwargs['val_ratio'], 'max_checks_without_progress': kwargs['max_checks_without_progress'], 'epoch_before_val': kwargs['epoch_before_val']}
         hyperparams['IC_optimal'] = IC_result[ind]
-        return(hyperparams, kwargs['location'], Final['prediction_train'], Final['prediction_val'], Final['prediction_test'], Final['train_loss_final'], Final['val_loss_final'], Final['test_loss_final'])
+        return(hyperparams, kwargs['save_location'], prediction_train, prediction_val, prediction_test, train_loss_final, val_loss_final, test_loss_final)
 
