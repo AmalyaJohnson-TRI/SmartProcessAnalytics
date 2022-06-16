@@ -24,7 +24,7 @@ import matplotlib.style
 import matplotlib as mpl
 mpl.style.use('default')
 
-def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference = 0.4, xticks = None, yticks = None, round_number = 0):
+def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference = 0.4, xticks = None, yticks = ['y'], round_number = 0):
     """
     This function assesses the nonlinear correlation between X[:] and y
     
@@ -52,8 +52,6 @@ def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference 
         
         if xticks is None:
             xticks = [r'x$_'+str(i)+'$' for i in range(1,np.shape(X)[1]+1)]
-        if yticks is None:
-            yticks = ['y']
         name = xticks[:] + yticks[:]
         dataset=pd.DataFrame(data= dataset, columns =name)
 
@@ -218,7 +216,7 @@ def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference 
         overall_result = np.concatenate((corr_difference, q_test), axis=0) # overall result
         return int(True in overall_result)
 
-def collinearity_assess(X, y, plot = True, xticks = None , yticks = None, round_number = 0):
+def collinearity_assess(X, y, plot = True, xticks = None , yticks = ['y'], round_number = 0):
     """
     This funcion assesses collinearity in the independent variables, using the variation inflation factor
     Rule of thumb: if VIF > 5, then the explanatory variable is highly collinear with other
@@ -250,8 +248,6 @@ def collinearity_assess(X, y, plot = True, xticks = None , yticks = None, round_
             print('=== Multicollinearity Results ===')
             if xticks is None:
                 xticks = [r'x$_'+str(i)+'$' for i in range(1,np.shape(X)[1]+1)]
-            if yticks is None:
-                yticks = ['y']
             plt.figure(figsize=(X.shape[1],3))
             sns.set(font_scale=1.6)
             sns.set_style("whitegrid")
@@ -461,7 +457,7 @@ def residual_analysis(X, y, y_hat, plot = True, nlag = None, alpha = 0.01, round
     int_dynamics = bool(acf_lag + pacf_lag)
     return (int_heteroscedasticity, int_dynamics)
 
-def nonlinearity_assess_dynamic(X, y, plot = True, cat = None, alpha = 0.01, difference = 0.4, xticks = None, yticks = None, round_number = 0, lag = 3):
+def nonlinearity_assess_dynamic(X, y, plot = True, cat = None, alpha = 0.01, difference = 0.4, xticks = None, yticks = ['y'], round_number = 0, lag = 3):
     """
     This function assesses the nonlinear correlation between X[:] and y
     
@@ -478,8 +474,6 @@ def nonlinearity_assess_dynamic(X, y, plot = True, cat = None, alpha = 0.01, dif
     # Nonlinearity by linear correlation, quadratic test, and maximal correlation
     m = np.shape(X)[1]
     N = np.shape(X)[0]
-    if yticks is None:
-        yticks = ['y']
     if xticks is None:
         xticks = [r'x$_'+str(i)+'$' for i in range(1,np.shape(X)[1]+1)]
     xticks = xticks + yticks
