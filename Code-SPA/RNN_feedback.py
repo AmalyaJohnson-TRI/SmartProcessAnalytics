@@ -239,7 +239,7 @@ def train_rnn(raw_data_x, raw_data_y, val_data_x, val_data_y, g, num_epochs, num
         checks_without_progress = 0 # For early stopping
         best_loss = np.infty
         
-        for idx, epoch in enumerate(gen_epochs(raw_data_x,raw_data_y,raw_data_yp,num_epochs, num_steps, batch_size,epoch_overlap)):
+        for idx, epoch in enumerate(gen_epochs(raw_data_x,raw_data_y,raw_data_yp,num_epochs, num_steps, batch_size, epoch_overlap)):
             training_loss = 0
             training_state = None
             for steps, (X, Y, YP) in enumerate(epoch):
@@ -260,7 +260,7 @@ def train_rnn(raw_data_x, raw_data_y, val_data_x, val_data_y, g, num_epochs, num
             if idx > epoch_before_val:
                 val_loss = 0
                 val_state = None
-                for steps_val, (X_val, Y_val, YP_val) in enumerate(gen_batch(val_data_x, val_data_y, val_data_yp, batch_size, num_steps,epoch_overlap)):
+                for steps_val, (X_val, Y_val, YP_val) in enumerate(gen_batch(val_data_x, val_data_y, val_data_yp, batch_size, num_steps, epoch_overlap)):
                     feed_dict_val = {g['x']: np.dstack((X_val,YP_val)), g['y']: Y_val, g['batch_size']: batch_size, g['input_prob']: 1 , g['output_prob']: 1, g['state_prob']: 1}
                     # Continue to feed in if in the same class
                     if val_state is not None:
@@ -305,7 +305,7 @@ def train_rnn_multi(raw_data_x, raw_data_y, val_data_x, val_data_y, timeindex_tr
         checks_without_progress = 0 # For early stopping
         best_loss = np.infty
         
-        for idx, epoch in enumerate(gen_epochs_multi(raw_data_x,raw_data_y, timeindex_train, num_epochs, num_steps, batch_size,epoch_overlap)):
+        for idx, epoch in enumerate(gen_epochs_multi(raw_data_x,raw_data_y, timeindex_train, num_epochs, num_steps, batch_size, epoch_overlap)):
             training_loss = 0
             s_threshold = 0
             training_state = None
