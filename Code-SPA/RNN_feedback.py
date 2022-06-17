@@ -147,19 +147,17 @@ def gen_epochs_multi(raw_data_x, raw_data_y, timeindex, num_epochs, num_steps, b
     for i in range(int(num_epochs)):
         yield gen_batch_multi(raw_data_x, raw_data_y, timeindex, batch_size, num_steps, epoch_overlap)
 
-def reset_graph():
-    if 'sess' in globals() and sess:
-        sess.close()
-    tf.reset_default_graph()
-
 # Define RNN graph
 def build_multilayer_rnn_graph_with_dynamic_rnn(cell_type, RNN_layers, activation, num_steps, x_num_features, y_num_features , learning_rate, lambda_l2_reg, random_seed = 0):
-    reset_graph()
-    tf.set_random_seed(random_seed) # For reproducibility
+    if 'sess' in globals() and sess:
+        sess.close()
+    tf.compat.v1.reset_default_graph()
+
+    tf.random.set_seed(random_seed) # For reproducibility
     x_num_features += y_num_features
     
     # Graph inputs
-    batch_size = tf.keras.Input([], dtype = tf.int32, name = 'batch_size') # TODO: test whether change to keras.Input was successful
+    batch_size = tf.keras.Input([], dtype = tf.float32, name = 'batch_size') # TODO: test whether change to keras.Input was successful
     x = tf.keras.Input([None, num_steps, x_num_features], dtype = tf.float32, name='x')
     y = tf.keras.Input([None, num_steps, y_num_features], dtype = tf.float32, name='y')
     input_prob = tf.keras.Input(1, name='input_prob', dtype = tf.float32)
@@ -171,11 +169,11 @@ def build_multilayer_rnn_graph_with_dynamic_rnn(cell_type, RNN_layers, activatio
     def get_a_cell(first_layer, input_prob, state_prob, num_input):
         # First, define the cell type
         if cell_type.casefold() == 'lstm':
-            cell_function = tf.nn.rnn_cell.LSTMCell
+            cell_function = tf.compat.v1.nn.rnn_cell.LSTMCell
         elif cell_type.casefold() == 'gru':
-            cell_function = tf.nn.rnn_cell.GRUCell
+            cell_function = tf.compat.v1.nn.rnn_cell.GRUCell
         else: # Basic RNN
-            cell_function = tf.nn.rnn_cell.BasicRNNCell
+            cell_function = tf.compat.v1.nn.rnn_cell.BasicRNNCell
         # Then, define the activation function and create a cell
         if activation.casefold() == 'linear':
             my_cell = cell_function(first_layer, activation = tf.identity)
@@ -188,20 +186,21 @@ def build_multilayer_rnn_graph_with_dynamic_rnn(cell_type, RNN_layers, activatio
         else:
             raise ValueError(f'Activation must be in {{"linear", "relu", "tanh", "sigmoid"}}, but you passed {activation}')
         # Finally, create a dropout wrapper
-        cell_drop = tf.contrib.rnn.DropoutWrapper(my_cell, variational_recurrent = True, dtype = tf.float32, input_size = num_input, input_keep_prob = input_prob, state_keep_prob = state_prob)
+        cell_drop = tf.compat.v1.nn.rnn_cell.DropoutWrapper(my_cell, variational_recurrent = True, dtype = tf.float32, input_size = num_input, input_keep_prob = input_prob, state_keep_prob = state_prob)
         return cell_drop
 
     # Create the full RNN and put it into a dropout wrapper
-    cell = tf.nn.rnn_cell.MultiRNNCell([get_a_cell(layer, input_prob, state_prob, x_num_features if layer == RNN_layers[0] else layer) for layer in RNN_layers])
-    cell = tf.nn.rnn_cell.DropoutWrapper(cell, variational_recurrent = True, dtype = tf.float32, input_size = x_num_features, output_keep_prob = output_prob)
-    init_state = cell.zero_state(batch_size, dtype = tf.float32)
+    cell = tf.keras.layers.StackedRNNCells([get_a_cell(layer, input_prob, state_prob, x_num_features if layer == RNN_layers[0] else layer) for layer in RNN_layers])
+    cell = tf.compat.v1.nn.rnn_cell.DropoutWrapper(cell, variational_recurrent = True, dtype = tf.float32, input_size = x_num_features, output_keep_prob = output_prob)
+    # TODO: change RNN cells to Keras. May then be able to exclude this DropoutWrapper. See https://github.com/tensorflow/tensorflow/issues/29129
+    init_state = cell.get_initial_state(batch_size, dtype = tf.float32)
     # Build dynamic graph
-    rnn_outputs, final_state = tf.nn.dynamic_rnn(cell = cell, inputs = rnn_inputs, initial_state = init_state)
+    rnn_outputs, final_state = tf.compat.v1.nn.dynamic_rnn(cell = cell, inputs = rnn_inputs, initial_state = init_state)
 
     # Final softmax for prediction
-    with tf.variable_scope('softmax'):
-        W = tf.get_variable('W', [RNN_layers[-1], y_num_features])
-        b = tf.get_variable('b', [y_num_features], initializer = tf.constant_initializer(0.0))
+    with tf.compat.v1.variable_scope('softmax'):
+        W = tf.compat.v1.get_variable('W', [RNN_layers[-1], y_num_features])
+        b = tf.compat.v1.get_variable('b', [y_num_features], initializer = tf.compat.v1.constant_initializer(0.0))
     rnn_outputs = tf.reshape(rnn_outputs, [-1, RNN_layers[-1]])
     predictions = tf.matmul(rnn_outputs, W) + b
     yy = tf.reshape(y, [-1, y_num_features])   # TODO: Should we have this double reshape here and in the MSE?
@@ -209,27 +208,27 @@ def build_multilayer_rnn_graph_with_dynamic_rnn(cell_type, RNN_layers, activatio
 
     # Adding regularization
     if lambda_l2_reg > 0 :
-        cell_l2 = tf.reduce_sum([tf.nn.l2_loss(tf_var) for tf_var in tf.trainable_variables() if not ("noreg" in tf_var.name or "Bias" in tf_var.name)])
+        cell_l2 = tf.reduce_sum(input_tensor=[tf.nn.l2_loss(tf_var) for tf_var in tf.compat.v1.trainable_variables() if not ("noreg" in tf_var.name or "Bias" in tf_var.name)]) # TODO: check whether this reduce_sum is right
         Predict_l2 = tf.nn.l2_loss(W) #+ tf.nn.l2_loss(b)
-        total_loss = tf.reduce_sum( loss + lambda_l2_reg*tf.reduce_sum(cell_l2 + Predict_l2) )
+        total_loss = tf.reduce_sum( input_tensor=loss + lambda_l2_reg*tf.reduce_sum(input_tensor=cell_l2 + Predict_l2) ) # TODO: check whether this reduce_sum is right
     else:
         total_loss = loss
 
-    train_step = tf.train.AdamOptimizer(learning_rate).minimize(total_loss)
+    train_step = tf.compat.v1.train.AdamOptimizer(learning_rate).minimize(total_loss)
     return dict(x = x, y = y, batch_size = batch_size, input_prob = input_prob, state_prob = state_prob,
                 output_prob = output_prob, init_state = init_state, final_state = final_state, rnn_outputs = rnn_outputs,
-                total_loss = total_loss, loss = loss, train_step = train_step, preds = predictions, saver= tf.train.Saver())
+                total_loss = total_loss, loss = loss, train_step = train_step, preds = predictions, saver= tf.compat.v1.train.Saver())
     
 # Train RNN graph
 def train_rnn(raw_data_x, raw_data_y, val_data_x, val_data_y, g, num_epochs, num_steps, batch_size, input_prob, output_prob, state_prob, epoch_before_val = 50,
                 max_checks_without_progress = 50, epoch_overlap = None, verbose = True, save = False):
-    with tf.Session() as sess:
+    with tf.compat.v1.Session() as sess:
         # initialize the variables
-        sess.run(tf.global_variables_initializer())
+        sess.run(tf.compat.v1.global_variables_initializer())
         raw_data_yp = np.insert(raw_data_y, 0, 0, axis = 0)[:-1]
         val_data_yp = np.insert(val_data_y, 0, 0, axis = 0)[:-1]
 
-        variable_shapes = [v.get_shape() for v in tf.trainable_variables()]
+        variable_shapes = [v.get_shape() for v in tf.compat.v1.trainable_variables()]
         parameter_num = 0
         for shape in variable_shapes: # TODO: can probably change this to a cumsum / cumprod
             parameter_num += shape[0]*shape[1] if np.size(shape)>1 else shape[0]
@@ -292,10 +291,10 @@ def train_rnn(raw_data_x, raw_data_y, val_data_x, val_data_y, g, num_epochs, num
 # Train RNN graph for multiple series
 def train_rnn_multi(raw_data_x, raw_data_y, val_data_x, val_data_y, timeindex_train, timeindex_val, g, num_epochs, num_steps, batch_size, input_prob, output_prob,
                     state_prob, epoch_before_val = 50, max_checks_without_progress = 50, epoch_overlap = None, verbose = True, save = False):
-    with tf.Session() as sess:
+    with tf.compat.v1.Session() as sess:
         # Initialize the variables
-        sess.run(tf.global_variables_initializer())
-        variable_shapes = [v.get_shape() for v in tf.trainable_variables()]
+        sess.run(tf.compat.v1.global_variables_initializer())
+        variable_shapes = [v.get_shape() for v in tf.compat.v1.trainable_variables()]
         parameter_num = 0
         for shape in variable_shapes: # TODO: can probably change this to a cumsum / cumprod
             parameter_num += shape[0]*shape[1] if np.size(shape)>1 else shape[0]
@@ -364,8 +363,8 @@ def train_rnn_multi(raw_data_x, raw_data_y, val_data_x, val_data_y, timeindex_tr
 
 # Test RNN graph 0 step
 def test_rnn(test_data_x, test_data_y, g, checkpoint, input_prob, output_prob, state_prob, num_test):
-    with tf.Session() as sess:
-        sess.run(tf.global_variables_initializer())
+    with tf.compat.v1.Session() as sess:
+        sess.run(tf.compat.v1.global_variables_initializer())
         test_data_yp = np.insert(test_data_y,0,0,axis=0)[:-1]
         # Read the trained graph
         g['saver'].restore(sess, checkpoint)
@@ -379,8 +378,8 @@ def test_rnn(test_data_x, test_data_y, g, checkpoint, input_prob, output_prob, s
 
 # Test RNN graph 0 step for multiplayer afterwards
 def test_rnn_layer(test_data_x, test_data_y, g, checkpoint, input_prob, output_prob, state_prob, num_test, num_layers):
-    with tf.Session() as sess:
-        sess.run(tf.global_variables_initializer())
+    with tf.compat.v1.Session() as sess:
+        sess.run(tf.compat.v1.global_variables_initializer())
         test_data_yp = np.insert(test_data_y,0,0,axis=0)[:-1]
         final = {}
         # Read the trained graph
@@ -412,8 +411,8 @@ def test_rnn_layer(test_data_x, test_data_y, g, checkpoint, input_prob, output_p
 
 # Test RNN graph single layer
 def test_rnn_kstep(test_data_x, test_data_y, preds, rnn_outputs, g, checkpoint, input_prob, output_prob, state_prob, num_test, kstep = 3):
-    with tf.Session() as sess:
-        sess.run(tf.global_variables_initializer())
+    with tf.compat.v1.Session() as sess:
+        sess.run(tf.compat.v1.global_variables_initializer())
         result = {}
         # Read the trained graph
         g['saver'].restore(sess, checkpoint)
@@ -429,8 +428,8 @@ def test_rnn_kstep(test_data_x, test_data_y, preds, rnn_outputs, g, checkpoint, 
 
 # Test RNN graph multi layer
 def test_rnn_kstep_layer(test_data_x, test_data_y, preds, rnn_outputs, g, checkpoint, input_prob, output_prob, state_prob, num_test, kstep = 3):
-    with tf.Session() as sess:
-        sess.run(tf.global_variables_initializer())
+    with tf.compat.v1.Session() as sess:
+        sess.run(tf.compat.v1.global_variables_initializer())
         result= {}
         # Read the trained graph
         g['saver'].restore(sess, checkpoint)
