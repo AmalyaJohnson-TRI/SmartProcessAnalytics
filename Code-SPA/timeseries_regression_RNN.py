@@ -72,7 +72,7 @@ def timeseries_RNN_feedback_single_train(X_train, y_train, X_val = None, y_val =
 
     # Load and pre-process the data
     if X_val is None:
-        X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size = val_ratio)
+        X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size = val_ratio) # TODO: should we go back to X_train[:num_train] because we're dealing with timeseries data?
     num_train = X_train.shape[0]
     if X_test is not None:
         num_test = X_test.shape[0]
@@ -217,7 +217,7 @@ def timeseries_RNN_feedback_multi_train(X_train, y_train, timeindex_train, X_val
     """
     # Load and pre-process the data
     if X_val is None:
-        X_train, X_val, y_train, y_val = train_test_split(X, y, test_size = val_ratio) 
+        X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size = val_ratio) # TODO: should we go back to X_train[:num_train] because we're dealing with timeseries data?
     if timeindex_val is None:
         timeindex_val = timeindex_train
     num_train = X_train.shape[0]
