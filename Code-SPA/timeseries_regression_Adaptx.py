@@ -22,7 +22,7 @@ from sklearn.preprocessing import StandardScaler
 
 
 def Adaptx_matlab_single(X, y, data_url, url, X_test=None, y_test=None, train_ratio = 1,\
-                      mymaxlag = 12, mydegs = [-1, 0, 1], mynow = 1, steps = 10, plot = True):
+                      max_lag = 12, mydegs = [-1, 0, 1], mynow = 1, steps = 10, plot = True):
     '''This function fits the CVA-state space model for training data X, y of first training ratio data,
     and use rest (1-ratio_data) for forcasting. There can also be test data to test the fitted state space model
     Input:
@@ -33,7 +33,7 @@ def Adaptx_matlab_single(X, y, data_url, url, X_test=None, y_test=None, train_ra
         data_url: desired working directory for saving all the results, be a sub-folder of the main ADPATX folder
         url: main directory for ADAPTX folder
         train_ratio: float, portion of training data used to train the model, and the rest is used as validation data
-        mymaxlag: maximum lag number considered for the CVA, default = 12
+        max_lag: maximum lag number considered for the CVA, default = 12
         mydegs: degs considered for the trend in state space model, can chose from [-1 0 1 2 3,4], defualt [-1 0 1]
         mynow: instantaneous effect of u on y in state space model, 1: yes, 0: no, defualt 1
         steps: number of steps considered for prediction
@@ -90,7 +90,7 @@ def Adaptx_matlab_single(X, y, data_url, url, X_test=None, y_test=None, train_ra
     
     m_y = np.shape(y)[1]
     ###Save parameters in a file
-    sio.savemat('myparams.mat', {'url':url,'data_url':data_url, 'mydimy':m_y, 'mymaxlag':mymaxlag,'mydegs':mydegs, 'mynow':mynow, 'val':test, 'steps':steps, 'n_train':n_train})
+    sio.savemat('myparams.mat', {'url':url,'data_url':data_url, 'mydimy':m_y, 'max_lag':max_lag,'mydegs':mydegs, 'mynow':mynow, 'val':test, 'steps':steps, 'n_train':n_train})
      
     
     ###Call the matlab script
@@ -333,7 +333,7 @@ def Adaptx_matlab_single(X, y, data_url, url, X_test=None, y_test=None, train_ra
     
     
 def Adaptx_matlab_multi(X, y, timeindex, num_series, data_url, url, X_test=None, y_test=None, train_ratio = 1,\
-                      mymaxlag = 12, mydegs = [-1, 0, 1], mynow = 1, steps = 10, plot = True):
+                      max_lag = 12, mydegs = [-1, 0, 1], mynow = 1, steps = 10, plot = True):
 
     '''This function fits the CVA-state space model for training data X, y of first training ratio data,
     and use rest (1-ratio_data) for forcasting. There can also be test data to test the fitted state space model
@@ -347,7 +347,7 @@ def Adaptx_matlab_multi(X, y, timeindex, num_series, data_url, url, X_test=None,
         y_test: testing data response numpy array: N_test x 1
         data_url: desired working directory for saving all the results, be a sub-folder of the main ADPATX folder
         url: main directory for ADAPTX folder
-        mymaxlag: maximum lag number considered for the CVA, default = 12
+        max_lag: maximum lag number considered for the CVA, default = 12
         mydegs: degs considered for the trend in state space model, can chose from [-1 0 1 2 3,4], defualt [-1 0 1]
         mynow: instantaneous effect of u on y in state space model, 1: yes, 0: no, defualt 1
         steps: number of steps considered for prediction
@@ -427,7 +427,7 @@ def Adaptx_matlab_multi(X, y, timeindex, num_series, data_url, url, X_test=None,
     m_y = np.shape(y)[1]
     m_u = np.shape(X)[1]
     ###Save parameters in a file
-    sio.savemat('myparams.mat', {'url':url,'data_url':data_url, 'mydimy':m_y, 'mydimu':m_u, 'mymaxlag':mymaxlag,'mydegs':mydegs, 'mynow':mynow, 'val':test, 'steps':steps})
+    sio.savemat('myparams.mat', {'url':url,'data_url':data_url, 'mydimy':m_y, 'mydimu':m_u, 'max_lag':max_lag,'mydegs':mydegs, 'mynow':mynow, 'val':test, 'steps':steps})
      
     
     ###Call the matlab script

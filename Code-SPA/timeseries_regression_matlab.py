@@ -1,105 +1,66 @@
-# -*- coding: utf-8 -*-
 """
-Created on Wed Jun 12 09:38:56 2019
-
-@author: Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com
-(c) 2020 Weike Sun, all rights reserved
+Original work by Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com, https://github.com/vickysun5/SmartProcessAnalytics
+Modified by Pedro Seber, https://github.com/PedroSeber/SmartProcessAnalytics
 """
-
-"""
-This file call MATLAB for state space model fitting,
-There are two modes:
-    (1) Single training set, with option of testing data
-    (2) Multiple training sets, with option of testing data
-"""
-
 import numpy as np
 import matlab.engine
 import scipy.io as sio
 import os
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
-import matplotlib.style
-import matplotlib as mpl
-mpl.style.use('default')
+from matplotlib import style
+style.use('default')
+from timeseries_regression_RNN import plot_helper
 
-def timeseries_matlab_single(X, y, X_test=None, y_test=None, train_ratio = 1,\
-                      maxorder = 10, mynow = 1, steps = 10, plot = True):
-    '''This function fits the state space model using matlab n4sid for training data X, y of first training ratio data,
+def timeseries_matlab_single(X, y, X_test = None, y_test = None, train_ratio = 1, maxorder = 10, mynow = 1, steps = 10, plot = False):
+    """
+    Fits the state space model using matlab n4sid for training data X, y of first training ratio data,
     and use rest (1-ratio_data) for forcasting. There can also be test data to test the fitted state space model
-    Input:
-        X: training data predictors numpy array: Nxm
-        y: training data response numy array: Nx1
-        X_test: testing data predictors numpy arrray: N_testxm
-        y_test: testing data response numpy array: N_test x 1
-        train_ratio: float, portion of training data used to train the model, and the rest is used as validation data
-        maxorder: maximum state space order used, default = 10
-        mynow: instantaneous effect of u on y in state space model, 1: yes, 0: no, defualt 1
-        steps: number of steps considered for prediction
-        plot: flag for plotting results or not, default TRUE
-        
-        
-    Output:
-        fitted system:
-            my_matlab_ss: sys, A, B, C, D, K
-        
-            
-        Preditction results:
-            MSE_train, MSE_val, MSE_test with differnt prediction steps
-            
-                prediction: prediction by final optimal model, Num_steps X timeinstances, the frist row is one step ahead by Kalman
-                error: the error y_predict-y_real
-    '''
 
-    print('======== Pre-process Data =========')
+    Parameters
+    ----------
+    X_train, y_train : Numpy array with shape N x m, N x 1
+        Training data predictors and response.
+    X_test, y_test : Numpy array with shape N_test x m, N_test x 1, optional, default = None
+        Testing data predictors and response.
+    train_ratio: float, portion of training data used to train the model, and the rest is used as validation data
+    maxorder: maximum state space order used, default = 10
+    mynow: instantaneous effect of u on y in state space model, 1: yes, 0: no, defualt 1
+    steps: number of steps considered for prediction
+    plot: flag for plotting results or not, default TRUE
+        
+    """
     n_train = round(train_ratio*np.shape(y)[0])
-
     scaler = StandardScaler()
     scaler.fit(X[:n_train])
     X = scaler.transform(X)
-        
     scalery = StandardScaler()
     scalery.fit(y[:n_train])
     y=scalery.transform(y)
         
-
-    if y_test is not None:
-        test = 1
+    if y_test:
         X_test = scaler.transform(X_test)
         y_test = scalery.transform(y_test)
-    else:
-        test = 0
 
-
-
-
-
-    ###Save Data in desired form to mydata.mat, which contains mydata as a matrix of size (m_y+m_x)xN, where y as the first row
-    mydata=np.vstack((np.transpose(y),np.transpose(X)))    
-    sio.savemat('mydata.mat', {'mydata':mydata})
-    
-    if test:
-        ###Save test Data in desired form to mydataval.mat
+    # Save data to mydata.mat, which contains mydata as a matrix of size (m_y+m_x) x N, with y as the first row
+    mydata = np.vstack( (np.transpose(y),np.transpose(X)) )
+    sio.savemat('mydata.mat', {'mydata': mydata})
+    if y_test:
         mydatatest=np.vstack((np.transpose(y_test),np.transpose(X_test)))    
         sio.savemat('mydatatest.mat', {'mydatatest':mydatatest})
-
     
     m_y = np.shape(y)[1]
-    ###Save parameters in a file
-    sio.savemat('myparams.mat', {'mydimy':m_y, 'mynow':mynow,'maxorder':maxorder, 'test':test, 'steps':steps, 'n_train':n_train})
-     
-    print('=========Model Training==========')
-    ###Call the matlab script
+    # Save parameters in a file
+    sio.savemat('myparams.mat', {'mydimy': m_y, 'mynow': mynow, 'maxorder': maxorder, 'test': bool(y_test), 'steps': steps, 'n_train': n_train})
+
+    # Call the matlab script
     eng = matlab.engine.start_matlab()
     eng.cd(os.getcwd())
-    #eng.addpath(url, nargout=0)
-    eng.Matlab_singleset_fit_test(nargout=0)
-    
+    eng.Matlab_singleset_fit_test(nargout = 0)
     eng.quit()
     
-    ###Read Results and do Plots
-    #the parameters are saved in myresults
-    myresults_train = sio.loadmat('myresults_train.mat')
+    # Read results
+    myresults_train = sio.loadmat('myresults_train.mat') # The parameters are saved in myresults
     y_predict_train = myresults_train['prediction']
     y_real_train = y[:n_train].transpose()
     train_error = myresults_train['error']
@@ -112,102 +73,63 @@ def timeseries_matlab_single(X, y, X_test=None, y_test=None, train_ratio = 1,\
         val_error = myresults_val['error_val']
         MSE_val = myresults_val['MSE_val']
     else:
-        y_predict_val =None
+        y_predict_val = None
         val_error = None
-        MSE_val =None
+        MSE_val = None
         
-    if test:
+    if y_test:
         myresults_test = sio.loadmat('myresults_test.mat')
         y_predict_test = myresults_test['prediction_test']
         y_real_test = y_test.transpose()
         test_error = myresults_test['error_test']
         MSE_test = myresults_test['MSE_test']    
     else:
-        y_predict_test =None
+        y_predict_test = None
         test_error = None
-        MSE_test =None
-        
+        MSE_test = None
     
-    
-    #plot the prediction results
+    # Plot the results
     if plot:
-        import matplotlib
-        cmap = matplotlib.cm.get_cmap('Paired')
-        
-        s=12
-        
-        print('=====Plot Data for prediction=======')
-        #plot the prediction vs real
+        from matplotlib.cm import get_cmap
+        cmap = get_cmap('Paired')
+        s = 12
         for i in range(steps):
             for j in range(m_y):
-        
-                plt.figure(figsize=(5,3))
-                plt.plot(y_real_train[j], color= cmap(j*2+1), label= 'real')
-                plt.plot(y_predict_train[m_y*i+j], '--', color= 'xkcd:coral', label = 'prediction')
-                plt.title('Training data' + str(i+1) +'-step prediction for y' + str(j+1),fontsize=s)
-                plt.xlabel('Time index',fontsize=s)
-                plt.ylabel('y',fontsize=s)
-                plt.legend(fontsize=s)
-                plt.tight_layout()
-                plt.savefig('Train_var_' + str(j+1)+'_step_'+str(i+1)+'.png', dpi = 600,bbox_inches='tight')
-                
+                y_var = y_real_train[j]
+                pred_var = y_predict_train[m_y*i + j]
+                plot_helper(y_var, pred_var, cmap, j, 'training', s, i, model_name = '')
                 if train_ratio < 1:
-                    plt.figure(figsize=(5,3))
-                    plt.plot(y_real_val[j], color= cmap(j*2+1), label= 'real')
-                    plt.plot(y_predict_val[m_y*i+j], '--', color= 'xkcd:coral',label = 'prediction')
-                    plt.title('Validation data ' + str(i+1) +'-step prediction for y' + str(j+1),fontsize=s)
-                    plt.xlabel('Time index',fontsize=s)
-                    plt.ylabel('y',fontsize=s)
-                    plt.legend(fontsize=s)
-                    plt.tight_layout()                    
-                    plt.savefig('Val_var_' + str(j+1)+'_step_'+str(i+1)+'.png', dpi = 600,bbox_inches='tight')
+                    y_var = y_real_val[j]
+                    pred_var = y_predict_val[m_y*i + j]
+                    plot_helper(y_var, pred_var, cmap, j, 'validation', s, i, model_name = '')
+                if y_test:
+                    y_var = y_real_test[j]
+                    y_predict_test[m_y*i + j]
+                    plot_helper(y_var, pred_var, cmap, j, 'testing', s, i, model_name = '')
 
-                if test:
-                    plt.figure(figsize=(5,3))
-                    plt.plot(y_real_test[j], color= cmap(j*2+1), label= 'real')
-                    plt.plot(y_predict_test[m_y*i+j], '--',color= 'xkcd:coral', label = 'prediction')
-                    plt.title('Test data ' + str(i+1) +'-step prediction for y' + str(j+1),fontsize=s)
-                    plt.xlabel('Time index',fontsize=s)
-                    plt.ylabel('y',fontsize=s)
-                    plt.legend(fontsize=s)
-                    plt.tight_layout()                    
-                    plt.savefig('Test_var_' + str(j+1)+'_step_'+str(i+1)+'.png', dpi = 600,bbox_inches='tight')
-
-                
-#                plt.close('all')
-        
-        #plot fitting errors
-        
-        max_limit=np.nanmax(train_error[-m_y:],axis=1)
-        min_limit=np.nanmin(train_error[-m_y:],axis=1)
-        
-        fig, axs = plt.subplots(steps,m_y,figsize=(3*m_y,2*steps))
-      
-        if m_y>1:
+        # Plot fitting errors
+        max_limit = np.nanmax(train_error[-m_y:], axis = 1)
+        min_limit = np.nanmin(train_error[-m_y:], axis = 1)
+        fig, axs = plt.subplots(steps, m_y, figsize = (3*m_y,2*steps))
+        if m_y > 1:
             for i in range(steps):
                 for j in range(m_y):
-                    axs[i,j].plot(train_error[m_y*i+j], color= cmap(j*2+1))
-                    axs[i,j].set_title('Training data' + str(i+1) +'-step error for y' + str(j+1), fontsize=s)
-                    axs[i,j].set_ylim(min_limit[j]-abs(min_limit[j])*0.5,max_limit[j]*1.5)
-                    if i is steps-1:
-                        axs[i,j].set_xlabel('Time index', fontsize=s)              
+                    axs[i,j].plot(train_error[m_y*i + j], color = cmap(j*2+1))
+                    axs[i,j].set_title(f'Training data step{i+1} error for y{j+1}', fontsize = s)
+                    axs[i,j].set_ylim(min_limit[j] - abs(min_limit[j])*0.5, max_limit[j]*1.5)
+            axs[i,j].set_xlabel('Time index', fontsize = s)
             fig.tight_layout()
-            plt.savefig('Train error.png', dpi = 600,bbox_inches='tight')
-            
-            
+            plt.savefig('Train_error.png', dpi = 600, bbox_inches = 'tight')
             if train_ratio < 1: 
-                
-                max_limit=np.nanmax(val_error[-m_y:],axis=1)
-                min_limit=np.nanmin(val_error[-m_y:],axis=1)
-                fig1, axs1 = plt.subplots(steps,m_y,figsize=(3*m_y,2*steps))
-                
+                max_limit = np.nanmax(val_error[-m_y:], axis = 1)
+                min_limit = np.nanmin(val_error[-m_y:], axis = 1)
+                fig1, axs1 = plt.subplots(steps, m_y, figsize = (3*m_y,2*steps))
                 for i in range(steps):
                     for j in range(m_y):
-                        axs1[i,j].plot(val_error[m_y*i+j], color= cmap(j*2+1))
+                        axs1[i,j].plot(val_error[m_y*i + j], color= cmap(j*2+1))
                         axs1[i,j].set_title('Val data' + str(i+1) +'-step error for y' + str(j+1), fontsize=s)
-                        axs1[i,j].set_ylim(min_limit[j]-abs(min_limit[j])*0.5,max_limit[j]*1.5)
-                        if i is steps-1:
-                            axs1[i,j].set_xlabel('Time index', fontsize=s)                
+                        axs1[i,j].set_ylim(min_limit[j] - abs(min_limit[j])*0.5, max_limit[j]*1.5)
+                axs1[i,j].set_xlabel('Time index', fontsize=s)
                 fig1.tight_layout()
                 plt.savefig('Val error.png', dpi=600,bbox_inches='tight')
                 
