@@ -6,26 +6,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 import RNN_feedback as RNN_fd
 import matplotlib.pyplot as plt
-import os
-import random
 import numpy as np
 import tensorflow as tf
-
-# Seed value
-# TODO: do we really need to set up all these seeds?
-seed_value = 1
-# 1. Set `PYTHONHASHSEED` environment variable at a fixed value
-os.environ['PYTHONHASHSEED'] = str(seed_value)
-seed_value += 1
-# 2. Set `python` built-in pseudo-random generator at a fixed value
-random.seed(seed_value)
-seed_value += 1
-# 3. Set `numpy` pseudo-random generator at a fixed value
-np.random.seed(seed_value)
-seed_value += 1
-# 4. Set `tensorflow` pseudo-random generator at a fixed value
-tf.set_random_seed(seed_value)
-
 
 def timeseries_RNN_feedback_single_train(X_train, y_train, X_val = None, y_val = None, X_test = None, y_test = None, val_ratio = 0.2, cell_type = 'basic', activation = 'tanh',
                                             RNN_layers = None, batch_size = 1, epoch_overlap = None, num_steps = 10, learning_rate = 1e-3, lambda_l2_reg = 1e-3,
@@ -55,9 +37,12 @@ def timeseries_RNN_feedback_single_train(X_train, y_train, X_val = None, y_val =
     activation: str, optional, default = 'tanh'
         NN activation function. Should be relu, tanh, sigmoid, or linear.
     RNN_layers : array, optional, default = None
-        An array with the number of neurons in each layer.
-        The length of this array is the number of hidden layers.
-        If None, is automatically set to [X_train.shape[1]] = m.
+        An array in which each entry is a container with the number of neurons in each layer.
+        The length of each container array is the number of hidden layers.
+        e.g.: [[512, 256]] tests a single RNN with 2 hidden layers, one with 512 ...
+            neurons and the other with 256 neurons. [[512, 256], [256, 256]] would ...
+            test 2 RNNs, each with 2 hidden layers, and so on.
+        If None, is automatically set to [[X_train.shape[1]]] = m (a double list).
     batch_size : int, optional, default = 1
         Batch size used when training the RNN.
     epoch_overlap : None or int, optional, default = None
@@ -94,7 +79,7 @@ def timeseries_RNN_feedback_single_train(X_train, y_train, X_val = None, y_val =
     x_num_features = X_train.shape[1]
     y_num_features = y_train.shape[1]
     if RNN_layers is None:
-        RNN_layers = [x_num_features]
+        RNN_layers = [[x_num_features]]
 
     scaler = StandardScaler()
     scaler.fit(X_train)
@@ -411,14 +396,13 @@ def timeseries_RNN_feedback_test(X_train, y_train, X_test, y_test, kstep = 1, ce
         else: 
             name = 'Test'
             
-        #plot the prediction vs real
         for i in range(kstep+1):
             for j in range(y_num_features):
                 y_var = y_test[i+1:, j]
                 pred_var = prediction_final[i][1:, j] 
                 plot_helper(y_var, pred_var, cmap, j, name, s, i)
 
-        #plot fitting errors
+        # Plot fitting errors
         max_limit = np.max(prediction_final[kstep][kstep+1:], axis = 0)
         min_limit = np.min(prediction_final[kstep][kstep+1:], axis = 0)
         fig2, axs2 = plt.subplots(kstep+1, y_num_features, figsize = (3*y_num_features, 2*(kstep+1)))
@@ -429,15 +413,13 @@ def timeseries_RNN_feedback_test(X_train, y_train, X_test, y_test, kstep = 1, ce
                     axs2[i,j].plot(prediction_final[i][1:, j] - Y_test[i+1:, j], color = cmap(j*2+1))
                     axs2[i,j].set_title(f'{name} data step{i+1} error for y{j+1}', fontsize = s)
                     axs2[i,j].set_ylim(min_limit[j] - abs(min_limit[j])*0.5, max_limit[j]*1.5)
-                    if i is kstep-1:
-                        axs2[i,j].set_xlabel('Time index', fontsize = s)
+            axs2[i,j].set_xlabel('Time index', fontsize = s)
         else: # TODO: can we merge these two for loops, or will an error appear because the variables below aren't 2D?
             for i in range(kstep+1):
                 axs2[i].plot(prediction_final[i][1:]-Y_test[i+1:], color= cmap(2+1))
                 axs2[i].set_title(f'{name} data step{i+1} error for y1', fontsize = s)
                 axs2[i].set_ylim(min_limit-abs(min_limit)*0.5,max_limit*1.5)
-                if i is kstep-1:
-                    axs2[i].set_xlabel('Time index', fontsize=s)                
+            axs2[i].set_xlabel('Time index', fontsize=s)
         fig2.tight_layout()
         plt.savefig(f'{name}_error_kstep.png', dpi = 600, bbox_inches = 'tight')        
         
@@ -454,7 +436,7 @@ def timeseries_RNN_feedback_test(X_train, y_train, X_test, y_test, kstep = 1, ce
     
     return (prediction_final, loss_final)
 
-def plot_helper(y_var, pred_var, cmap, j, ptype, s = 12, i = -1):
+def plot_helper(y_var, pred_var, cmap, j, ptype, s = 12, i = -1, model_name = 'RNN_'):
     plt.figure(figsize = (5,3))
     plt.plot(y_var, color = cmap(j*2+1), label = 'real')
     plt.plot(pred_var, '--', color = 'xkcd:coral', label = 'prediction')
@@ -466,7 +448,7 @@ def plot_helper(y_var, pred_var, cmap, j, ptype, s = 12, i = -1):
     plt.ylabel('y', fontsize = s)
     plt.legend(fontsize = s)
     plt.tight_layout()
-    plt.savefig(f'RNN_{ptype}_var_{j+1}.png', dpi = 600, bbox_inches = 'tight')
+    plt.savefig(f'{model_name}{ptype}_var_{j+1}.png', dpi = 600, bbox_inches = 'tight')
 
     if i < 0:
         plt.figure(figsize = (5,3))
@@ -475,5 +457,5 @@ def plot_helper(y_var, pred_var, cmap, j, ptype, s = 12, i = -1):
         plt.xlabel('Time index', fontsize = s)
         plt.ylabel('prediction - real', fontsize = s)
         plt.tight_layout()
-        plt.savefig(f'RNN_{ptype}_var_{j+1}_error.png', dpi = 600, bbox_inches = 'tight')
+        plt.savefig(f'{model_name}{ptype}_var_{j+1}_error.png', dpi = 600, bbox_inches = 'tight')
 
