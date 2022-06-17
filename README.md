@@ -2,9 +2,9 @@
 
 Smart Process Analytics (SPA) is a Python software for predictive modeling. It is associated with the paper ["Smart Process Analytics" by Weike Sun and Richard D. Braatz](https://doi.org/10.1016/j.compchemeng.2020.107134).
 
-[Smart\_Process\_Analytics.py](Smart_Process_Analytics.py) is the main file. All the other files needed to run [Smart\_Process\_Analytics.py](Smart_Process_Analytics.py) are stored in [Code-SPA](Code-SPA). To run SPA on your computer, simply download the [Code-SPA](Code-SPA) folder.
+[Code-SPA\SPA.py](SPA.py) is the main file. All the other files needed to run [Code-SPA\SPA.py](SPA.py) are stored in [Code-SPA](Code-SPA). To run SPA on your computer, simply download the [Code-SPA](Code-SPA) folder.
 
-[Smart\_Process\_Analytics.py](Smart_Process_Analytics.py) comes with default hyperparameters for different models, but all hyperparameters are customizable by the user. To learn how to do so, please read the documentation. You may also check the example file [Example\_1.py](Example/Example_1.py), which uses different methods directly called from the [cv\_final.py](Code-SPA/cv_final.py) file using the 3D printer example data in the original paper.
+[Code-SPA\SPA.py](SPA.py) comes with default hyperparameters for its models, but all hyperparameters are customizable by the user. To learn how to do so, please read the documentation. You may also check the example file [Example\_1.py](Example/Example_1.py), which uses different methods directly called from the [cv\_final.py](Code-SPA/cv_final.py) file using the 3D printer example data in the original paper.
 
 The major files in SPA are:
 1. [dataset\_property\_new.py](Code-SPA/dataset_property_new.py): functions for data interrogation.
@@ -17,7 +17,7 @@ The major files in SPA are:
 
 The final result is stored in the `selected_model` and `fitting_result` variables.
 
-Note: MATLAB is required to use the linear dynamic model. It is called through matlab.engine (https://www.mathworks.com/help/matlab/matlab_external/call-matlab-functions-from-python.html). If the user has ADAPTx, it can also be used to create a linear state-space model through SPA. SPA will ask for the url of your ADAPTx package.
+Note: MATLAB is required to use the linear dynamic model. It is called through matlab.engine (https://www.mathworks.com/help/matlab/matlab_external/call-matlab-functions-from-python.html). If the user has ADAPTx, it can also be used to create a linear state-space model through SPA.
 
 Please contact Richard Braatz at braatz@mit.edu for any inquiries.
 
