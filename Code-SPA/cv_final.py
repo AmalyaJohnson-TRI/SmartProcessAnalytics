@@ -1034,7 +1034,7 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         if 'activation' not in kwargs:
             kwargs['activation'] = ['tanh']
         if 'RNN_layers' not in kwargs:
-            kwargs['RNN_layers'] = [input_size_x]
+            kwargs['RNN_layers'] = [[input_size_x]]
 
         # Training parameters
         if 'batch_size' not in kwargs:
@@ -1062,7 +1062,7 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         state_prob_test = 1
 
         # Early stopping
-        if 'val_ratio' not in kwargs and X_val is None:
+        if 'val_ratio' not in kwargs:
             kwargs['val_ratio'] = 0.2
         else:
             kwards['val_ratio'] = 0
