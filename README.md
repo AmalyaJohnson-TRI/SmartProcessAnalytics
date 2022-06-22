@@ -8,7 +8,7 @@ Smart Process Analytics (SPA) is a Python software for predictive modeling. It i
 
 The major files in SPA are:
 1. [dataset\_property\_new.py](Code-SPA/dataset_property_new.py): functions for data interrogation.
-2. [cv\_final.py](Code-SPA/cv_final.py) / [cv\_final\_onestd.py](Code-SPA/cv_final_onestd.py): model construction using different cross-validation strategies (such as the one standard error rule).
+2. [cv\_final.py](Code-SPA/cv_final.py): model construction using different cross-validation strategies.
 3. [IC.py](Code-SPA/IC.py): model construction using information criteria for dynamic models.
 4. [regression\_models.py](Code-SPA/regression_models.py) / [nonlinear\_regression\_other.py](Code-SPA/nonlinear_regression_other.py): basic linear/nonlinear and DALVEN regression models in SPA.
 5. [timeseries\_regression\_RNN.py](Code-SPA/timeseries_regression_RNN.py): RNN model (including training/testing for single/multiple training sets).
