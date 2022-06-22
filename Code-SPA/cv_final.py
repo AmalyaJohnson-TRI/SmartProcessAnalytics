@@ -35,56 +35,57 @@ def CVpartition(X, y, Type = 'Re_KFold', K = 5, Nr = 10, random_state = 0, group
     group : list, optional, default = None
         Group indices for grouped CV methods.
     """
-    if Type == 'MC':
+    Type = Type.casefold() # To avoid issues with uppercase/lowercase
+    if Type == 'mc':
         CV = ShuffleSplit(n_splits = Nr, test_size = 1/K, random_state = random_state)
         for train_index, val_index in CV.split(X, y):
             yield (X[train_index], y[train_index], X[val_index], y[val_index])
-    elif Type == 'Single':
+    elif Type == 'single':
         X, X_test, y, y_test = train_test_split(X, y, test_size = 1/K, random_state = random_state)
         yield (X, y, X_test, y_test)
-    elif Type == 'KFold':
+    elif Type == 'kfold':
         CV = KFold(n_splits = int(K))
         for train_index, val_index in CV.split(X, y):
             yield (X[train_index], y[train_index], X[val_index], y[val_index])
-    elif Type == 'Re_KFold':
+    elif Type == 're_kfold':
         CV = RepeatedKFold(n_splits = int(K), n_repeats = Nr, random_state = random_state)
         for train_index, val_index in CV.split(X, y):
             yield (X[train_index], y[train_index], X[val_index], y[val_index])
-    elif Type == 'Timeseries':
+    elif Type == 'timeseries':
         TS = TimeSeriesSplit(n_splits = int(K))
         for train_index, val_index in TS.split(X):
             yield (X[train_index], y[train_index], X[val_index], y[val_index])
-    elif Type == 'Single_group':
+    elif Type == 'single_group':
         label = np.unique(group)
         num = int(len(label)/K)
         final_list = np.squeeze(group == label[0])
         for i in range(1, num):
             final_list = final_list | np.squeeze(group == label[i])
         yield(X[~final_list], y[~final_list], X[final_list], y[final_list])
-    elif Type == 'Group':
+    elif Type == 'group':
         label = np.unique(group)
         for i in range(len(label)):
             yield(X[np.squeeze(group != label[i])], y[np.squeeze(group != label[i])], X[np.squeeze(group == label[i])], y[np.squeeze(group == label[i])])
-    elif Type == 'Group_no_extrapolation':
+    elif Type == 'group_no_extrapolation':
         label = np.unique(group)
         for i in range(len(label)):
             if min(label) < label[i] and label[i] < max(label):
                 yield(X[np.squeeze(group != label[i])], y[np.squeeze(group != label[i])], X[np.squeeze(group == label[i])], y[np.squeeze(group == label[i])])
-    elif Type == 'GroupKFold':
+    elif Type == 'groupkfold':
         gkf = GroupKFold(n_splits = int(K))
         for train_index, val_index in gkf.split(X, y, groups = group):
             yield (X[train_index], y[train_index], X[val_index], y[val_index])
-    elif Type == 'GroupShuffleSplit':
+    elif Type == 'groupshufflesplit':
         gss = GroupShuffleSplit(n_splits = int(Nr), test_size = 1 / K, random_state = random_state)
         for train_index, val_index in gss.split(X, y, groups = group):
             yield (X[train_index], y[train_index], X[val_index], y[val_index])
-    elif Type == 'No_CV':
+    elif Type == 'no_cv':
         yield (X, y, X, y)
-    elif Type == 'Single_ordered':
+    elif Type == 'single_ordered':
         num = X.shape[0]
         yield (X[:num-round(X.shape[0]*1/K):], y[:num-round(X.shape[0]*1/K):], X[num-round(X.shape[0]*1/K):], y[num-round(X.shape[0]*1/K):])
     else:
-        print('Wrong type specified for data partition')
+        raise ValueError(f'{Type} is not a valid CV type.')
 
 def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, Nr = 1000, eps = 1e-4, alpha_num = 20, group = None, round_number = '', **kwargs):
     """
@@ -375,7 +376,7 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         if 'l1_ratio' not in kwargs:
             kwargs['l1_ratio'] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99][::-1]
         if 'degree' not in kwargs:
-            kwargs['degree'] = [1,2,3]
+            kwargs['degree'] = [1, 2, 3]
         if 'label_name' not in kwargs:
             kwargs['label_name'] = False
         if 'trans_type' not in kwargs:
@@ -383,106 +384,87 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         if 'select_value' not in kwargs:
             kwargs['ALVEN_select_pvalue'] = 0.10
 
-        MSE_result = np.zeros((len(kwargs['degree']),alpha_num,len(kwargs['l1_ratio'])))
+        MSE_result = np.empty((len(kwargs['degree']), alpha_num, len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan
+        if kwargs['robust_priority']:
+            Var = np.empty((len(kwargs['degree']), alpha_num, len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan
 
-        counter = 0
-        for X_train, y_train, X_val, y_val in CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group):
-            counter += 1
+        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
             for k in range(len(kwargs['degree'])):
                 for j in range(len(kwargs['l1_ratio'])):
                     for i in range(alpha_num):
-                        _, _, _, mse, _, _ , _, _= ALVEN(X_train, y_train, X_val, y_val, alpha = i, l1_ratio = kwargs['l1_ratio'][j],
-                                                      degree = kwargs['degree'][k], tol = eps , alpha_num = alpha_num, cv = True,
-                                                      selection = 'p_value', select_value = kwargs['ALVEN_select_pvalue'], trans_type = kwargs['trans_type'])
-                        MSE_result[k,i,j] += mse
+                        _, variable, _, mse, _, _ , _, _ = ALVEN(X_train, y_train, X_val, y_val, alpha = i, l1_ratio = kwargs['l1_ratio'][j],
+                                                    degree = kwargs['degree'][k], tol = eps , alpha_num = alpha_num, cv = True,
+                                                    selection = 'p_value', select_value = kwargs['ALVEN_select_pvalue'], trans_type = kwargs['trans_type'])
+                        MSE_result[k, i, j, counter] = mse
+                        if kwargs['robust_priority']:
+                            Var[k, i, j, counter] = np.sum(variable.flatten() != 0)
 
-        MSE_result = MSE_result/counter
+        MSE_mean = np.nanmean(MSE_result, axis = 3)
+        # Min MSE value (first occurrence)
+        ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
+        if kwargs['robust_priority']:
+            MSE_std = np.nanstd(MSE_result, axis = 3)
+            MSE_min = MSE_mean[ind]
+            MSE_bar = MSE_min + MSE_std[ind]
+            Var_num = np.nansum(Var, axis = 3)
+            ind = np.nonzero( Var_num == np.nanmin(Var_num[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
+            ind = (ind[0][0], ind[1][0], ind[2][0])
 
-
-
-        #find the min value, if there is a tie, only the first occurence is returned, and fit the final model
-        ind = np.unravel_index(np.argmin(MSE_result, axis=None), MSE_result.shape)
+        # Hyperparameter setup
         degree = kwargs['degree'][ind[0]]
         l1_ratio = kwargs['l1_ratio'][ind[2]]
 
-        ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index= ALVEN(X,y, X_test, y_test, alpha = ind[1], l1_ratio = l1_ratio,
-                                                                                           degree =  degree, tol = eps , alpha_num = alpha_num, cv = False,
-                                                                                           selection = 'p_value', select_value = kwargs['ALVEN_select_pvalue'], trans_type = kwargs['trans_type'])
+        ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index = ALVEN(X,y, X_test, y_test, alpha = ind[1],
+                                                l1_ratio = l1_ratio, degree = degree, tol = eps , alpha_num = alpha_num, cv = False,
+                                                selection = 'p_value', select_value = kwargs['ALVEN_select_pvalue'], trans_type = kwargs['trans_type'])
+        hyperparams = {}
+        hyperparams['alpha'] = alpha
+        hyperparams['l1_ratio'] = l1_ratio
+        hyperparams['degree'] = degree
+        hyperparams['retain_index'] = retain_index
 
-
-        hyper_params = {}
-        hyper_params['alpha'] = alpha
-        hyper_params['l1_ratio'] = l1_ratio
-        hyper_params['degree'] = degree
-        hyper_params['retain_index'] = retain_index
-
-        #get the name for the retained
+        # Names for the retained variables(?)
         if kwargs['trans_type'] == 'auto':
-            Xtrans,_ = nr.feature_trans(X, degree = degree, interaction = 'later')
+            Xtrans, _ = nr.feature_trans(X, degree = degree, interaction = 'later')
         else:
             Xtrans, _ = nr.poly_feature(X, degree = degree, interaction = True, power = True)
-
         sel = VarianceThreshold(threshold=eps).fit(Xtrans)
-
-
 
         if kwargs['label_name'] :
             if 'xticks' in kwargs:
                 list_name = kwargs['xticks']
             else:
-                list_name =['x'+str(i) for i in range(1,np.shape(X)[1]+1)]
+                list_name = [f'x{i}' for i in range(1, np.shape(X)[1]+1)]
 
+            list_name_final = list_name[:] # [:] makes a copy
             if kwargs['trans_type'] == 'auto':
-                if degree == 1:
-                    list_name_final = list_name + ['log('+ name + ')' for name in list_name] + ['sqrt(' +name+')' for name in list_name]+['1/' +name for name in list_name]
+                list_name_final += [f'log({name})' for name in list_name] + [f'sqrt({name})' for name in list_name] + [f'1/{name}' for name in list_name]
 
-                if degree == 2:
-                    list_name_final = list_name[:]
+                if degree >= 2:
                     for i in range(X.shape[1]-1):
-                        for j in range(i+1,X.shape[1]):
-                            list_name_final = list_name_final + [list_name[i]+'*'+list_name[j]]
-                    list_name_final  = list_name_final + ['log('+ name + ')' for name in list_name] + ['sqrt(' +name+')' for name in list_name]+['1/' +name for name in list_name]+[name +'^2' for name in list_name]+['(log'+ name + ')^2' for name in list_name] + ['1/' +name+'^2' for name in list_name]+\
-                                      [name +'^1.5' for name in list_name]+ ['log(' +name +')/' + name for name in list_name]+ ['1/' +name+'^0.5' for name in list_name]
+                        for j in range(i+1, X.shape[1]):
+                            list_name_final += [f'{list_name[i]}*{list_name[j]}']
+                    list_name_final += [f'{name}^2' for name in list_name] + [f'(log{name})^2' for name in list_name] + [f'1/{name}^2' for name in list_name] + (
+                            [f'{name}^1.5' for name in list_name] + [f'log({name})/{name}' for name in list_name]+ [f'1/{name}^0.5' for name in list_name] )
 
-                if degree == 3:
-                    list_name_final = list_name[:]
-
-                    for i in range(X.shape[1]-1):
-                        for j in range(i+1,X.shape[1]):
-                            list_name_final = list_name_final + [list_name[i]+'*'+list_name[j]]
-
+                if degree >= 3:
                     for i in range(X.shape[1]-2):
-                        for j in range(i+1,X.shape[1]-1):
-                            for k in range(j+1,X.shape[1]):
-                                list_name_final = list_name_final + [list_name[i]+'*'+list_name[j]+'*'+list_name[k]]
-                    list_name_final  = list_name_final + ['log('+ name + ')' for name in list_name] + ['sqrt(' +name+')' for name in list_name]+['1/' +name for name in list_name]+\
-                                       [name +'^2' for name in list_name]+['(log'+ name + ')^2' for name in list_name] + ['1/' +name+'^2' for name in list_name]+\
-                                       [name +'^1.5' for name in list_name]+ ['log(' +name +')/' + name for name in list_name]+ ['1/' +name+'^0.5' for name in list_name] +\
-                                       [name +'^3' for name in list_name]+['(log'+ name + ')^3' for name in list_name]  + ['1/' +name+'^3' for name in list_name]+\
-                                       [name +'^2.5' for name in list_name] +['(log' +name +')^2/' + name for name in list_name]+ ['log(' +name +')/sqrt(' + name +')' for name in list_name]+ ['log(' +name +')/' + name +'^2' for name in list_name]+\
-                                       [name +'^-1.5' for name in list_name]
-            else:
-                if degree == 1:
-                    list_name_final = list_name
+                        for j in range(i+1, X.shape[1]-1):
+                            for k in range(j+1, X.shape[1]):
+                                list_name_final += [f'{list_name[i]}*{list_name[j]}*{list_name[k]}']
+                    list_name_final += [f'{name}^3' for name in list_name] + [f'(log{name})^3' for name in list_name] + [f'1/{name}^3' for name in list_name] + (
+                                [f'{name}^2.5' for name in list_name] + [f'(log{name})^2/{name}' for name in list_name]+ [f'log({name})/sqrt({name})' for name in list_name] +
+                                [f'log({name})/{name}^2' for name in list_name] + [f'{name}^-1.5' for name in list_name] )
 
-                if degree == 2:
-                    list_name_final = list_name[:]
-                    for i in range(X.shape[1]):
-                        for j in range(i, X.shape[1]):
-                            list_name_final = list_name_final +[list_name[i]+'*'+list_name[j]]
-
-                if degree == 3:
-                    list_name_final = list_name[:]
-
-                    for i in range(X.shape[1]):
-                        for j in range(i, X.shape[1]):
-                            list_name_final = list_name_final +[list_name[i]+'*'+list_name[j]]
-
+            elif degree >= 2:
+                for i in range(X.shape[1]):
+                    for j in range(i, X.shape[1]):
+                        list_name_final += [f'{list_name[i]}*{list_name[j]}']
+                if degree >= 3:
                     for i in range(X.shape[1]):
                         for j in range(i, X.shape[1]):
                             for k in range(j, X.shape[1]):
-                                list_name_final = list_name_final + [list_name[i]+'*'+list_name[j]+'*'+list_name[k]]
-
+                                list_name_final += [f'{list_name[i]}*{list_name[j]}*{list_name[k]}']
 
             index = list(sel.get_support())
             list_name_final = [x for x, y in zip(list_name_final, index) if y]
@@ -490,54 +472,56 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
 
         else:
             list_name_final =  []
-
-
-        return(hyper_params, ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_result[ind], list_name_final)
-     ########################################################################################################################################
+        return(hyperparams, ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind], list_name_final)
 
     elif model_name == 'RF':
-
         if 'max_depth' not in kwargs:
-            kwargs['max_depth'] = [2,3,5,10,15,20,40]
+            kwargs['max_depth'] = [2, 3, 5, 10, 15, 20, 40]
         if 'n_estimators' not in kwargs:
             kwargs['n_estimators'] = [10, 50, 100, 200]
         if 'min_samples_leaf' not in kwargs:
             kwargs['min_samples_leaf'] = [0.0001]#0.02,0.05, 0.1] #, 0.05 ,0.1, 0.2] # 0.3, 0.4]
 
-        MSE_result = np.zeros((len(kwargs['max_depth']),len(kwargs['n_estimators']),len(kwargs['min_samples_leaf'])))
-
-        count = 0
-        for X_train, y_train, X_val, y_val in CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group):
-            count += 1
-#            print(count)
+        MSE_result = np.empty((len(kwargs['max_depth']), len(kwargs['n_estimators']), len(kwargs['min_samples_leaf']), K_fold*Nr))
+        if kwargs['robust_priority']:
+            # TODO: is this scoring system correct? It ignores the actual values of the paramters, caring only about their lengths and positions in the array.
+            S = np.zeros((len(kwargs['max_depth']), len(kwargs['n_estimators']), len(kwargs['min_samples_leaf'])))
             for i in range(len(kwargs['max_depth'])):
                 for j in range(len(kwargs['n_estimators'])):
                     for k in range(len(kwargs['min_samples_leaf'])):
-                        _, _, mse, _,_ = nro.RF_fitting(X_train, y_train, X_val,y_val, n_estimators = kwargs['n_estimators'][j], max_depth = kwargs['max_depth'][i], min_samples_leaf=kwargs['min_samples_leaf'][k])
-                        MSE_result[i,j,k] += mse
+                        S[i, j, k] = i/len(kwargs['max_depth']) - k/len(kwargs['min_samples_leaf'])
 
-        MSE_result = MSE_result/count
+        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+            for i in range(len(kwargs['max_depth'])):
+                for j in range(len(kwargs['n_estimators'])):
+                    for k in range(len(kwargs['min_samples_leaf'])):
+                        _, _, mse, _, _ = nro.RF_fitting(X_train, y_train, X_val, y_val, kwargs['n_estimators'][j], kwargs['max_depth'][i], kwargs['min_samples_leaf'][k])
+                        MSE_result[i, j, k, counter] = mse
 
-        #find the min value, if there is a tie, only the first occurence is returned
-        ind = np.unravel_index(np.argmin(MSE_result, axis=None), MSE_result.shape)
+        MSE_mean = np.nanmean(MSE_result, axis = 3)
+        # Min MSE value (first occurrence)
+        ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
+        if kwargs['robust_priority']:
+            MSE_std = np.nanstd(MSE_result, axis = 3)
+            MSE_min = MSE_mean[ind]
+            MSE_bar = MSE_min + MSE_std[ind]
+            ind = np.nonzero( S == np.nanmin(S[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
+            ind = (ind[0][0], ind[1][0], ind[2][0])
+
+        # Hyperparameter setup
         max_depth = kwargs['max_depth'][ind[0]]
         n_estimators = kwargs['n_estimators'][ind[1]]
         min_samples_leaf = kwargs['min_samples_leaf'][ind[2]]
+        hyperparams = {}
+        hyperparams['max_depth'] = max_depth
+        hyperparams['n_estimators'] = n_estimators
+        hyperparams['min_samples_leaf'] = min_samples_leaf
 
-        hyper_params = {}
-        hyper_params['max_depth'] = max_depth
-        hyper_params['n_estimators'] = n_estimators
-        hyper_params['min_samples_leaf'] = min_samples_leaf
-
-        #fit the final model using opt hyper_params
-        RF_model, mse_train, mse_test, yhat_train, yhat_test = nro.RF_fitting(X, y, X_test, y_test, n_estimators = n_estimators, max_depth = max_depth, min_samples_leaf = min_samples_leaf)
-
-        return(hyper_params, RF_model, mse_train, mse_test, yhat_train, yhat_test, MSE_result[ind])
-
-    ########################################################################################################################################
+        # Fit the final model
+        RF_model, mse_train, mse_test, yhat_train, yhat_test = nro.RF_fitting(X, y, X_test, y_test, n_estimators, max_depth, min_samples_leaf)
+        return(hyperparams, RF_model, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name == 'SVR':
-
         if 'C' not in kwargs:
             kwargs['C'] = [0.001, 0.01, 0.1, 1, 10 ,50, 100, 500]
         if 'gamma' not in kwargs:
@@ -546,235 +530,160 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         if 'epsilon' not in kwargs:
             kwargs['epsilon'] = [0.01, 0.02, 0.03, 0.05, 0.08, 0.09, 0.1, 0.15, 0.2, 0.3]
 
-        MSE_result = np.zeros((len(kwargs['C']),len(kwargs['gamma']),len(kwargs['epsilon'])))
-
-        counter = 0
-        for X_train, y_train, X_val, y_val in CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group):
-            counter += 1
-#            print(counter)
+        MSE_result = np.empty((len(kwargs['C']), len(kwargs['gamma']), len(kwargs['epsilon']), K_fold*Nr)) * np.nan
+        if kwargs['robust_priority']:
+            # TODO: is this scoring system correct? It ignores the actual values of the paramters, caring only about their lengths and positions in the array.
+            S = np.zeros((len(kwargs['C']), len(kwargs['gamma']), len(kwargs['epsilon'])))
             for i in range(len(kwargs['C'])):
                 for j in range(len(kwargs['gamma'])):
                     for k in range(len(kwargs['epsilon'])):
-                        _, _, mse, _,_ = nro.SVR_fitting(X_train, y_train, X_val,y_val,
-                                                     C=kwargs['C'][i], gamma=kwargs['gamma'][j], epsilon=kwargs['epsilon'][k])
-                        MSE_result[i,j,k] += mse
+                        S[i, j, k] = i/len(kwargs['C']) - j/len(kwargs['gamma']) - k/len(kwargs['epsilon'])
 
-        MSE_result = MSE_result/counter
+        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+            for i in range(len(kwargs['C'])):
+                for j in range(len(kwargs['gamma'])):
+                    for k in range(len(kwargs['epsilon'])):
+                        _, _, mse, _, _ = nro.SVR_fitting(X_train, y_train, X_val, y_val, kwargs['C'][i], kwargs['epsilon'][k], kwargs['gamma'][j])
+                        MSE_result[i, j, k, counter] = mse
 
-        #find the min value, if there is a tie, only the first occurence is returned
-        ind = np.unravel_index(np.argmin(MSE_result, axis=None), MSE_result.shape)
+        MSE_mean = np.nanmean(MSE_result, axis = 3)
+        # Min MSE value (first occurrence)
+        ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
+        if kwargs['robust_priority']:
+            MSE_std = np.nanstd(MSE_result, axis = 3)
+            MSE_min = MSE_mean[ind]
+            MSE_bar = MSE_min + MSE_std[ind]
+            ind = np.nonzero( S == np.nanmin(S[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
+            ind = (ind[0][0], ind[1][0], ind[2][0])
+
+        # Hyperparameter setup
         C = kwargs['C'][ind[0]]
         gamma = kwargs['gamma'][ind[1]]
         epsilon = kwargs['epsilon'][ind[2]]
+        hyperparams = {}
+        hyperparams['C'] = C
+        hyperparams['gamma'] = gamma
+        hyperparams['epsilon'] = epsilon
 
-        hyper_params = {}
-        hyper_params['C'] = C
-        hyper_params['gamma'] = gamma
-        hyper_params['epsilon'] = epsilon
+        # Fit the final model
+        SVR_model, mse_train, mse_test, yhat_train, yhat_test =  nro.SVR_fitting(X, y, X_test, y_test, C, epsilon, gamma)
+        return(hyperparams, SVR_model, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
-        #fit the final model using opt hyper_params
-        SVR_model, mse_train, mse_test, yhat_train, yhat_test =  nro.SVR_fitting(X, y, X_test,y_test,
-                                                                                C=C, gamma=gamma, epsilon=epsilon)
-
-        return(hyper_params, SVR_model, mse_train, mse_test, yhat_train, yhat_test, MSE_result[ind])
-
-    ########################################################################################################################################
-
-    elif model_name == 'DALVEN':
+    elif model_name == 'DALVEN' or model_name == 'DALVEN_full_nonlinear':
         DALVEN = rm.model_getter(model_name)
-
-
         if 'l1_ratio' not in kwargs:
             kwargs['l1_ratio'] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99][::-1]
         if 'degree' not in kwargs:
-            kwargs['degree'] = [1,2,3]
-
+            kwargs['degree'] = [1, 2, 3]
         if 'lag' not in kwargs:
-            kwargs['lag'] = [i+1 for i in range(40)]
-
+            kwargs['lag'] =  [i+1 for i in range(40)]
         if 'label_name' not in kwargs:
             kwargs['label_name'] = False
-
         if 'trans_type' not in kwargs:
             kwargs['trans_type'] = 'auto'
-
         if 'select_value' not in kwargs:
             kwargs['select_pvalue'] = 0.05
 
+        MSE_result = np.empty((len(kwargs['degree']), alpha_num, len(kwargs['l1_ratio']), len(kwargs['lag']), K_fold*Nr)) * np.nan
+        if kwargs['robust_priority']:
+            Var = np.empty((len(kwargs['degree']), alpha_num, len(kwargs['l1_ratio']), len(kwargs['lag']), K_fold*Nr)) * np.nan
 
-        MSE_result = np.zeros((len(kwargs['degree']),alpha_num,len(kwargs['l1_ratio']), len(kwargs['lag'])))
-
-        #check if the data is zscored, score back:
-        #########################to be continue###################################
-
-        counter = 0
-        for X_train, y_train, X_val, y_val in CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group):
-            counter += 1
-#            print('*****'+str(counter))
+        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
             for k in range(len(kwargs['degree'])):
                 for j in range(len(kwargs['l1_ratio'])):
                     for i in range(alpha_num):
                         for t in range(len(kwargs['lag'])):
-                            _, _, _, mse, _, _ , _, _,_= DALVEN(X_train, y_train, X_val, y_val, alpha = i, l1_ratio = kwargs['l1_ratio'][j],
-                                                      degree = kwargs['degree'][k], lag = kwargs['lag'][t], tol = eps , alpha_num = alpha_num, cv = True,
-                                                      selection = 'p_value', select_value = kwargs['select_pvalue'], trans_type = kwargs['trans_type'])
-                            MSE_result[k,i,j,t] += mse
+                            _, variable, _, mse, _, _, _, _, _ = DALVEN(X_train, y_train, X_val, y_val, alpha = i, l1_ratio = kwargs['l1_ratio'][j],
+                                                degree = kwargs['degree'][k], lag = kwargs['lag'][t], tol = eps , alpha_num = alpha_num, cv = True,
+                                                selection = 'p_value', select_value = kwargs['select_pvalue'], trans_type = kwargs['trans_type'])
+                            MSE_result[k, i, j, t, counter] = mse
+                            if kwargs['robust_priority']:
+                                Var[k, i, j, t, counter] = np.sum(variable.flatten() != 0)
 
-        MSE_result = MSE_result/counter
+        MSE_mean = np.nanmean(MSE_result, axis = 4)
+        # Min MSE value (first occurrence)
+        ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
+        if kwargs['robust_priority']:
+            MSE_std = np.nanstd(MSE_result, axis = 4)
+            MSE_min = MSE_mean[ind]
+            MSE_bar = MSE_min + MSE_std[ind]
+            Var_num = np.nansum(Var, axis = 4)
+            ind = np.nonzero( Var_num == np.nanmin(Var_num[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
+            ind = (ind[0][0], ind[1][0], ind[2][0], ind[3][0])
 
-
-
-        #find the min value, if there is a tie, only the first occurence is returned, and fit the final model
-        ind = np.unravel_index(np.argmin(MSE_result, axis=None), MSE_result.shape)
+        # Hyperparameter setup
         degree = kwargs['degree'][ind[0]]
         l1_ratio = kwargs['l1_ratio'][ind[2]]
         lag = kwargs['lag'][ind[3]]
 
-        DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index,_= DALVEN(X,y, X_test, y_test, alpha = ind[1], l1_ratio = l1_ratio,
-                                                                                           degree =  degree, lag = lag, tol = eps , alpha_num = alpha_num, cv = False,
-                                                                                           selection = 'p_value', select_value = kwargs['select_pvalue'], trans_type = kwargs['trans_type'])
+        DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index, _ = DALVEN(X, y, X_test, y_test, alpha = ind[1],
+                                                    l1_ratio = l1_ratio, degree =  degree, lag = lag, tol = eps , alpha_num = alpha_num, cv = False,
+                                                    selection = 'p_value', select_value = kwargs['select_pvalue'], trans_type = kwargs['trans_type'])
+        hyperparams = {}
+        hyperparams['alpha'] = alpha
+        hyperparams['l1_ratio'] = l1_ratio
+        hyperparams['degree'] = degree
+        hyperparams['lag'] = lag
+        hyperparams['retain_index'] = retain_index
 
-
-        hyper_params = {}
-        hyper_params['alpha'] = alpha
-        hyper_params['l1_ratio'] = l1_ratio
-        hyper_params['degree'] = degree
-        hyper_params['lag'] = lag
-        hyper_params['retain_index'] = retain_index
-
-        #get the name for the retained
-        if kwargs['trans_type'] == 'auto':
-            Xtrans,_ = nr.feature_trans(X, degree = degree, interaction = 'later')
-        else:
-            Xtrans, _ = nr.poly_feature(X, degree = degree, interaction = True, power = True)
-
-
-
-        #lag padding for X
-        XD = Xtrans[lag:]
-        for i in range(lag):
-            XD = np.hstack((XD,Xtrans[lag-1-i:-i-1]))
-
-        #lag padding for y in design matrix
-        for i in range(lag):
-            XD = np.hstack((XD,y[lag-1-i:-i-1]))
-
-        #remove feature with 0 variance
-        sel = VarianceThreshold(threshold=eps).fit(XD)
-
-
-
+        # Names for the retained variables(?)
         if kwargs['label_name'] :
+            if kwargs['trans_type'] == 'auto':
+                Xtrans, _ = nr.feature_trans(X, degree = degree, interaction = 'later')
+            else:
+                Xtrans, _ = nr.poly_feature(X, degree = degree, interaction = True, power = True)
+
+            # Lag padding for X
+            XD = Xtrans[lag:]
+            for i in range(lag):
+                XD = np.hstack((XD, Xtrans[lag-1-i : -i-1]))
+            # Lag padding for y in design matrix
+            for i in range(lag):
+                XD = np.hstack((XD, y[lag-1-i : -i-1]))
+
+            # Remove features with insignificant variance
+            sel = VarianceThreshold(threshold=eps).fit(XD)
+
             if 'xticks' in kwargs:
                 list_name = kwargs['xticks']
             else:
-                list_name =['x'+str(i) for i in range(1,np.shape(X)[1]+1)]
+                list_name = [f'x{i}' for i in range(1, np.shape(X)[1]+1)]
 
+            list_name_final = list_name[:] # [:] makes a copy
             if kwargs['trans_type'] == 'auto':
-                if degree == 1:
-                    list_name_final = list_name + ['log('+ name + ')' for name in list_name] + ['sqrt(' +name+')' for name in list_name]+['1/' +name for name in list_name]
-                    list_copy = list_name_final[:]
+                list_name_final += [f'log({name})' for name in list_name] + [f'sqrt({name})' for name in list_name] + [f'1/{name}' for name in list_name]
 
-                    for i in range(lag):
-                        list_name_final = list_name_final + [s + '(t-' + str(i+1) + ')' for s in list_copy]
-                    for i in range(lag):
-                        list_name_final = list_name_final + ['y(t-' + str(i+1) +')' ]
-
-
-
-                if degree == 2:
-                    list_name_final = list_name[:]
+                if degree >= 2:
                     for i in range(X.shape[1]-1):
-                        for j in range(i+1,X.shape[1]):
-                            list_name_final = list_name_final + [list_name[i]+'*'+list_name[j]]
-                    list_name_final  = list_name_final + ['log('+ name + ')' for name in list_name] + ['sqrt(' +name+')' for name in list_name]+['1/' +name for name in list_name]+[name +'^2' for name in list_name]+['(log'+ name + ')^2' for name in list_name] + ['1/' +name+'^2' for name in list_name]+\
-                                      [name +'^1.5' for name in list_name]+ ['log(' +name +')/' + name for name in list_name]+ ['1/' +name+'^0.5' for name in list_name]
-                    list_copy = list_name_final[:]
+                        for j in range(i+1, X.shape[1]):
+                            list_name_final += [f'{list_name[i]}*{list_name[j]}']
+                    list_name_final += [f'{name}^2' for name in list_name] + [f'(log{name})^2' for name in list_name] + [f'1/{name}^2' for name in list_name] + (
+                            [f'{name}^1.5' for name in list_name] + [f'log({name})/{name}' for name in list_name]+ [f'1/{name}^0.5' for name in list_name] )
 
-                    for i in range(lag):
-                        list_name_final = list_name_final + [s + '(t-' + str(i+1) + ')' for s in list_copy]
-                    for i in range(lag):
-                        list_name_final = list_name_final + ['y(t-' + str(i+1) +')' ]
-
-
-
-
-                if degree == 3:
-                    list_name_final = list_name[:]
-
-                    for i in range(X.shape[1]-1):
-                        for j in range(i+1,X.shape[1]):
-                            list_name_final = list_name_final + [list_name[i]+'*'+list_name[j]]
-
+                if degree >= 3:
                     for i in range(X.shape[1]-2):
-                        for j in range(i+1,X.shape[1]-1):
-                            for k in range(j+1,X.shape[1]):
-                                list_name_final = list_name_final + [list_name[i]+'*'+list_name[j]+'*'+list_name[k]]
-                    list_name_final  = list_name_final + ['log('+ name + ')' for name in list_name] + ['sqrt(' +name+')' for name in list_name]+['1/' +name for name in list_name]+\
-                                       [name +'^2' for name in list_name]+['(log'+ name + ')^2' for name in list_name] + ['1/' +name+'^2' for name in list_name]+\
-                                       [name +'^1.5' for name in list_name]+ ['log(' +name +')/' + name for name in list_name]+ ['1/' +name+'^0.5' for name in list_name] +\
-                                       [name +'^3' for name in list_name]+['(log'+ name + ')^3' for name in list_name]  + ['1/' +name+'^3' for name in list_name]+\
-                                       [name +'^2.5' for name in list_name] +['(log' +name +')^2/' + name for name in list_name]+ ['log(' +name +')/sqrt(' + name +')' for name in list_name]+ ['log(' +name +')/' + name +'^2' for name in list_name]+\
-                                       [name +'^-1.5' for name in list_name]
+                        for j in range(i+1, X.shape[1]-1):
+                            for k in range(j+1, X.shape[1]):
+                                list_name_final += [f'{list_name[i]}*{list_name[j]}*{list_name[k]}']
+                    list_name_final += [f'{name}^3' for name in list_name] + [f'(log{name})^3' for name in list_name] + [f'1/{name}^3' for name in list_name] + (
+                                [f'{name}^2.5' for name in list_name] + [f'(log{name})^2/{name}' for name in list_name]+ [f'log({name})/sqrt({name})' for name in list_name] +
+                                [f'log({name})/{name}^2' for name in list_name] + [f'{name}^-1.5' for name in list_name] )
 
-                    list_copy = list_name_final[:]
-
-                    for i in range(lag):
-                        list_name_final = list_name_final + [s + '(t-' + str(i+1) + ')' for s in list_copy]
-                    for i in range(lag):
-                        list_name_final = list_name_final + ['y(t-' + str(i+1) +')' ]
-
-
-
-
-
-            else:
-                if degree == 1:
-                    list_name_final = list_name
-                    list_copy = list_name_final[:]
-
-                    for i in range(lag):
-                        list_name_final = list_name_final + [s + '(t-' + str(i+1) + ')' for s in list_copy]
-                    for i in range(lag):
-                        list_name_final = list_name_final + ['y(t-' + str(i+1) +')' ]
-
-
-
-                if degree == 2:
-                    list_name_final = list_name[:]
-                    for i in range(X.shape[1]):
-                        for j in range(i, X.shape[1]):
-                            list_name_final = list_name_final +[list_name[i]+'*'+list_name[j]]
-                    list_copy = list_name_final[:]
-
-                    for i in range(lag):
-                        list_name_final = list_name_final + [s + '(t-' + str(i+1) + ')' for s in list_copy]
-                    for i in range(lag):
-                        list_name_final = list_name_final + ['y(t-' + str(i+1) +')' ]
-
-
-
-                if degree == 3:
-                    list_name_final = list_name[:]
-
-                    for i in range(X.shape[1]):
-                        for j in range(i, X.shape[1]):
-                            list_name_final = list_name_final +[list_name[i]+'*'+list_name[j]]
-
+            elif degree >= 2:
+                for i in range(X.shape[1]):
+                    for j in range(i, X.shape[1]):
+                        list_name_final += [f'{list_name[i]}*{list_name[j]}']
+                if degree >= 3:
                     for i in range(X.shape[1]):
                         for j in range(i, X.shape[1]):
                             for k in range(j, X.shape[1]):
-                                list_name_final = list_name_final + [list_name[i]+'*'+list_name[j]+'*'+list_name[k]]
+                                list_name_final += [f'{list_name[i]}*{list_name[j]}*{list_name[k]}']
 
-                    list_copy = list_name_final[:]
-
-                    for i in range(lag):
-                        list_name_final = list_name_final + [s + '(t-' + str(i+1) + ')' for s in list_copy]
-                    for i in range(lag):
-                        list_name_final = list_name_final + ['y(t-' + str(i+1) +')' ]
-
-
-
+            list_copy = list_name_final[:]
+            for i in range(lag):
+                list_name_final += [f'{s}(t-{i+1})' for s in list_copy]
+            for i in range(lag):
+                list_name_final += [f'y(t-{i+1})'] 
 
             index = list(sel.get_support())
             list_name_final = [x for x, y in zip(list_name_final, index) if y]
@@ -782,183 +691,7 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
 
         else:
             list_name_final =  []
-
-
-        return(hyper_params, DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_result[ind], list_name_final)
-
-
-
-
-    ########################################################################################################################################
-
-    elif model_name == 'DALVEN_full_nonlinear':
-        DALVEN = rm.model_getter(model_name)
-
-
-        if 'l1_ratio' not in kwargs:
-            kwargs['l1_ratio'] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99][::-1]
-        if 'degree' not in kwargs:
-            kwargs['degree'] = [1,2] #,3]
-
-        if 'lag' not in kwargs:
-            kwargs['lag'] = [i+1 for i in range(40)]
-
-        if 'label_name' not in kwargs:
-            kwargs['label_name'] = False
-
-        if 'trans_type' not in kwargs:
-            kwargs['trans_type'] = 'auto'
-
-        if 'select_value' not in kwargs:
-            kwargs['select_pvalue'] = 0.05
-
-
-        MSE_result = np.zeros((len(kwargs['degree']),alpha_num,len(kwargs['l1_ratio']), len(kwargs['lag'])))
-
-        #check if the data is zscored, score back:
-        #########################to be continue###################################
-
-        counter = 0
-        for X_train, y_train, X_val, y_val in CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group):
-            counter += 1
-#            print('*****'+str(counter))
-            for k in range(len(kwargs['degree'])):
-                for j in range(len(kwargs['l1_ratio'])):
-                    for i in range(alpha_num):
-                        for t in range(len(kwargs['lag'])):
-                            _, _, _, mse, _, _ , _, _,_= DALVEN(X_train, y_train, X_val, y_val, alpha = i, l1_ratio = kwargs['l1_ratio'][j],
-                                                      degree = kwargs['degree'][k], lag = kwargs['lag'][t], tol = eps , alpha_num = alpha_num, cv = True,
-                                                      selection = 'p_value', select_value = kwargs['select_pvalue'], trans_type = kwargs['trans_type'])
-                            MSE_result[k,i,j,t] += mse
-
-        MSE_result = MSE_result/counter
-
-
-
-        #find the min value, if there is a tie, only the first occurence is returned, and fit the final model
-        ind = np.unravel_index(np.argmin(MSE_result, axis=None), MSE_result.shape)
-        degree = kwargs['degree'][ind[0]]
-        l1_ratio = kwargs['l1_ratio'][ind[2]]
-        lag = kwargs['lag'][ind[3]]
-
-        DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index,_= DALVEN(X,y, X_test, y_test, alpha = ind[1], l1_ratio = l1_ratio,
-                                                                                           degree =  degree, lag = lag, tol = eps , alpha_num = alpha_num, cv = False,
-                                                                                           selection = 'p_value', select_value = kwargs['select_pvalue'], trans_type = kwargs['trans_type'])
-
-
-        hyper_params = {}
-        hyper_params['alpha'] = alpha
-        hyper_params['l1_ratio'] = l1_ratio
-        hyper_params['degree'] = degree
-        hyper_params['lag'] = lag
-        hyper_params['retain_index'] = retain_index
-
-
-
-        #lag padding for X
-        XD = X[lag:]
-        for i in range(lag):
-            XD = np.hstack((XD,X[lag-1-i:-i-1]))
-
-        #lag padding for y in design matrix
-        for i in range(lag):
-            XD = np.hstack((XD,y[lag-1-i:-i-1]))
-
-        #get the name for the retained
-        if kwargs['trans_type'] == 'auto':
-            XD,_ = nr.feature_trans(XD, degree = degree, interaction = 'later')
-        else:
-            XD, _ = nr.poly_feature(XD, degree = degree, interaction = True, power = True)
-
-
-        #remove feature with 0 variance
-        sel = VarianceThreshold(threshold=eps).fit(XD)
-
-
-
-        if kwargs['label_name'] :
-            list_name =['x'+str(i) for i in range(1,np.shape(X)[1]+1)]
-            list_copy = list_name[:]
-
-            for i in range(lag):
-                list_name = list_name + [s + '(t-' + str(i+1) + ')' for s in list_copy]
-            for i in range(lag):
-                list_name = list_name + ['y(t-' + str(i+1) +')' ]
-
-
-            if kwargs['trans_type'] == 'auto':
-                if degree == 1:
-                    list_name_final = list_name + ['log('+ name + ')' for name in list_name] + ['sqrt(' +name+')' for name in list_name]+['1/' +name for name in list_name]
-
-
-                if degree == 2:
-                    list_name_final = list_name[:]
-                    for i in range(len(list_name)-1):
-                        for j in range(i+1,len(list_name)):
-                            list_name_final = list_name_final + [list_name[i]+'*'+list_name[j]]
-                    list_name_final  = list_name_final + ['log('+ name + ')' for name in list_name] + ['sqrt(' +name+')' for name in list_name]+['1/' +name for name in list_name]+[name +'^2' for name in list_name]+['(log'+ name + ')^2' for name in list_name] + ['1/' +name+'^2' for name in list_name]+\
-                                      [name +'^1.5' for name in list_name]+ ['log(' +name +')/' + name for name in list_name]+ ['1/' +name+'^0.5' for name in list_name]
-
-
-
-                if degree == 3:
-                    list_name_final = list_name[:]
-
-                    for i in range(len(list_name)-1):
-                        for j in range(i+1,len(list_name)):
-                            list_name_final = list_name_final + [list_name[i]+'*'+list_name[j]]
-
-                    for i in range(len(list_name)-2):
-                        for j in range(i+1,len(list_name)-1):
-                            for k in range(j+1,len(list_name)):
-                                list_name_final = list_name_final + [list_name[i]+'*'+list_name[j]+'*'+list_name[k]]
-                    list_name_final  = list_name_final + ['log('+ name + ')' for name in list_name] + ['sqrt(' +name+')' for name in list_name]+['1/' +name for name in list_name]+\
-                                       [name +'^2' for name in list_name]+['(log'+ name + ')^2' for name in list_name] + ['1/' +name+'^2' for name in list_name]+\
-                                       [name +'^1.5' for name in list_name]+ ['log(' +name +')/' + name for name in list_name]+ ['1/' +name+'^0.5' for name in list_name] +\
-                                       [name +'^3' for name in list_name]+['(log'+ name + ')^3' for name in list_name]  + ['1/' +name+'^3' for name in list_name]+\
-                                       [name +'^2.5' for name in list_name] +['(log' +name +')^2/' + name for name in list_name]+ ['log(' +name +')/sqrt(' + name +')' for name in list_name]+ ['log(' +name +')/' + name +'^2' for name in list_name]+\
-                                       [name +'^-1.5' for name in list_name]
-
-
-
-
-            else:
-                if degree == 1:
-                    list_name_final = list_name
-
-
-                if degree == 2:
-                    list_name_final = list_name[:]
-                    for i in range(X.shape[1]):
-                        for j in range(i, X.shape[1]):
-                            list_name_final = list_name_final +[list_name[i]+'*'+list_name[j]]
-
-
-
-                if degree == 3:
-                    list_name_final = list_name[:]
-
-                    for i in range(len(list_name)):
-                        for j in range(i, len(list_name)):
-                            list_name_final = list_name_final +[list_name[i]+'*'+list_name[j]]
-
-                    for i in range(len(list_name)):
-                        for j in range(i, len(list_name)):
-                            for k in range(j, len(list_name)):
-                                list_name_final = list_name_final + [list_name[i]+'*'+list_name[j]+'*'+list_name[k]]
-
-
-
-
-            index = list(sel.get_support())
-            list_name_final = [x for x, y in zip(list_name_final, index) if y]
-            list_name_final = [x for x, y in zip(list_name_final, retain_index) if y]
-
-        else:
-            list_name_final =  []
-
-
-        return(hyper_params, DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_result[ind], list_name_final)
+        return(hyperparams, DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind], list_name_final)
 
     elif model_name == 'RNN':
         import timeseries_regression_RNN as RNN
@@ -1012,7 +745,9 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         if 'plot' not in kwargs:
             kwargs['plot'] = False
 
-        MSE_result = np.zeros( (len(kwargs['cell_type']), len(kwargs['activation']), len(kwargs['RNN_layers'])) )
+        MSE_result = np.empty((len(kwargs['cell_type']), len(kwargs['activation']), len(kwargs['RNN_layers']), K_fold*Nr)) * np.nan
+        if kwargs['robust_priority']:
+            S = np.empty((len(kwargs['cell_type']), len(kwargs['activation']), len(kwargs['RNN_layers']), K_fold*Nr)) * np.nan
 
         for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, cv_type, K_fold, Nr, group = group)):
             for i in range(len(kwargs['cell_type'])):
@@ -1022,13 +757,22 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
                                 kwargs['activation'][j], kwargs['RNN_layers'][k], kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'],
                                 kwargs['lambda_l2_reg'], kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test,
                                 output_prob_test, state_prob_test, kwargs['max_checks_without_progress'], kwargs['epoch_before_val'], kwargs['save_location'], plot = False)
+                        MSE_result[i, j, k, counter] = val_loss
+                        if kwargs['robust_priority']:
+                            S[i, j, k, counter] = k + i + j # TODO: is this scoring system correct? It ignores the actual values of the paramters, caring only about their positions in the array.
 
-                        MSE_result[i, j, k] += val_loss
+        MSE_mean = np.nanmean(MSE_result, axis = 3)
+        # Min MSE value (first occurrence)
+        ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
+        if kwargs['robust_priority']:
+            MSE_std = np.nanstd(MSE_result, axis = 3)
+            MSE_min = MSE_mean[ind]
+            MSE_bar = MSE_min + MSE_std[ind]
+            S_val = np.nansum(S, axis = 3)
+            ind = np.nonzero( S_val == np.nanmin(S_val[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
+            ind = (ind[0][0], ind[1][0], ind[2][0])
 
-        MSE_result = MSE_result / (counter+1)
-
-        # Min IC value (first occurrence)
-        ind = np.unravel_index(np.argmin(MSE_result, axis=None), MSE_result.shape)
+        # Hyperparameter setup
         cell_type = kwargs['cell_type'][ind[0]]
         activation = kwargs['activation'][ind[1]]
         RNN_layers = kwargs['RNN_layers'][ind[2]]
@@ -1046,6 +790,6 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
                                         'lambda_l2_reg': kwargs['lambda_l2_reg'], 'num_epochs': kwargs['num_epochs']}
         hyperparams['drop_out'] = {'input_prob': kwargs['input_prob'], 'output_prob': kwargs['output_prob'], 'state_prob': kwargs['state_prob']}
         hyperparams['early_stop'] = {'val_ratio': kwargs['val_ratio'], 'max_checks_without_progress': kwargs['max_checks_without_progress'], 'epoch_before_val': kwargs['epoch_before_val']}
-        hyperparams['MSE_val'] = MSE_result[ind]
+        hyperparams['MSE_val'] = MSE_mean[ind]
         return(hyperparams, kwargs['save_location'], prediction_train, prediction_val, prediction_test, train_loss_final, val_loss_final, test_loss_final)
 
