@@ -508,7 +508,7 @@ def DALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree, lag, alpha_num
         num_train = XD_fit.shape[0]
         num_parameter = sum(DALVEN_params!=0)[0]
         AIC = num_train*np.log(mse_train) + 2*num_parameter
-        AICc = num_train*np.log(mse_train) + (num_parameter+num_train)/(1-(num_parameter+2)/num_train)
+        AICc = num_train*np.log(mse_train) + (num_parameter+num_train)/(1-(num_parameter+2)/num_train) # TODO: Fix the divide by zero errors
         BIC = num_train*np.log(mse_train) + num_parameter*np.log(num_train)
     
     return (DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index,(AIC,AICc,BIC))
