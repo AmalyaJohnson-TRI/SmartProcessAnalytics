@@ -2,13 +2,13 @@
 Original work by Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com, https://github.com/vickysun5/SmartProcessAnalytics
 Modified by Pedro Seber, https://github.com/PedroSeber/SmartProcessAnalytics
 """
-from pandas import read_excel, read_csv
 import numpy as np
 from dataset_property_new import nonlinearity_assess, collinearity_assess, residual_analysis, nonlinearity_assess_dynamic
 import cv_final as cv
 from sklearn.preprocessing import StandardScaler
 from copy import deepcopy
 from os.path import splitext
+from pandas import read_excel, read_csv
 from matplotlib import style
 style.use('default')
 import warnings
@@ -352,8 +352,7 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
 
         if 'OLS' not in model_name: # We don't want to print the same message twice
             # Determing whether a dynamic model should have been used
-            yhat_test = scaler_y.inverse_transform(fitting_result[local_selected_model]['yhat_test']) # TODO: should this yhat_test always be un-scaled? ALVEN shouldn't return a scaled yhat_test
-            # TODO: Should y_test (and maybe X_test) be scaled before residual_analysis?
+            yhat_test = scaler_y.inverse_transform(fitting_result[local_selected_model]['yhat_test'])
             _, dynamic_model = residual_analysis(X_test, y_test, yhat_test, plot = plot_interrogation, alpha = alpha, round_number = round_number)
             if dynamic_model:
                 print('A residual analysis found dynamics in the system. Please run SPA again with dynamic_model = True')
@@ -366,19 +365,12 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
             RNN_layers = [[m]]
 
         print('Running model RNN', end = '\r')        
-        if 'IC' in cv_method:
-            import IC
-            if robust_priority and cv_method != 'BIC':
-                print(f'Note: BIC is recommended for robustness, but you selected {cv_method}.')
-            RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN = IC.IC_mse('RNN', X_scale,
-                    y_scale, X_test_scale, y_test_scale, cv_type = cv_method, cell_type = RNN_cell, activation = RNN_activation, RNN_layers = RNN_layers,
-                    num_steps = RNN_past_steps, batch_size = RNN_batch_size, epoch_overlap = RNN_epoch_overlap, learning_rate = RNN_learning_rate,
-                    lambda_l2_reg = RNN_lambda_l2_reg, num_epochs = RNN_num_epochs, max_checks_without_progress = RNN_max_checks_without_progress)
-        else:
-            RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN = cv.CV_mse('RNN', X_scale,
-                    y_scale, X_test_scale, y_test_scale, cv_method, K_fold, Nr, cell_type = RNN_cell, group = group, activation = RNN_activation, RNN_layers = RNN_layers,
-                    num_steps = RNN_past_steps, batch_size = RNN_batch_size, epoch_overlap = RNN_epoch_overlap, learning_rate = RNN_learning_rate,
-                    lambda_l2_reg = RNN_lambda_l2_reg, num_epochs = RNN_num_epochs, max_checks_without_progress = RNN_max_checks_without_progress, robust_priority = robust_priority)
+        if robust_priority and cv_method in {'AIC', 'AICc'}:
+            print(f'Note: BIC is recommended for robustness, but you selected {cv_method}.')
+        RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN = cv.CV_mse('RNN', X_scale,
+                y_scale, X_test_scale, y_test_scale, cv_method, K_fold, Nr, cell_type = RNN_cell, group = group, activation = RNN_activation, RNN_layers = RNN_layers,
+                num_steps = RNN_past_steps, batch_size = RNN_batch_size, epoch_overlap = RNN_epoch_overlap, learning_rate = RNN_learning_rate,
+                lambda_l2_reg = RNN_lambda_l2_reg, num_epochs = RNN_num_epochs, max_checks_without_progress = RNN_max_checks_without_progress, robust_priority = robust_priority)
 
         fitting_result['RNN'] = {'model_hyper': RNN_hyper, 'final_model': RNN_model, 'mse_train': mse_train_RNN, 'mse_val': mse_val_RNN, 'mse_test': mse_test_RNN,
                 'yhat_train': yhat_train_RNN, 'yhat_val': yhat_val_RNN, 'yhat_test': yhat_test_RNN, 'MSE_val': MSE_val}
@@ -430,12 +422,10 @@ def load_file(filename):
     Used by SPA to load data files.
     """
     _, ext = splitext(filename)
-    if ext == '.txt': # Assume is separated by space
-        my_file = read_csv(filename, header = None, sep = ' ').values
-        for separator in (',', '\t', ';'): # Testing random separators
-            if my_file.shape[-1] == 1: # The file likely is not separated by a space
-                my_file = read_csv(filename, header = None, sep = separator).values
-            else: # We likely found the separator
+    if ext == '.txt':
+        for separator in (' ', ',', '\t', ';'): # Testing random separators
+            my_file = read_csv(filename, header = None, sep = separator).values
+            if my_file.shape[-1] > 1: # We likely found the separator
                 break
     elif ext == '.csv':
         my_file = read_csv(filename, header = None, sep = ',').values
@@ -504,15 +494,14 @@ def run_DALVEN(model_name, X, y, X_test, y_test, cv_method, alpha_num, lag, degr
         Automatically called by SPA based on what was passed to main_SPA()
     """
     if 'IC' in cv_method:
-        import IC
         if robust_priority and cv_method != 'BIC':
             print(f'Note: BIC is recommended for robustness, but you selected {cv_method}.')
-        DALVEN_hyper, DALVEN_model, DALVEN_params, mse_train_DALVEN, mse_test_DALVEN, yhat_train_DALVEN, yhat_test_DALVEN, MSE_v_DALVEN, final_list = IC.IC_mse(model_name,
-                X, y, X_test, y_test, cv_type = cv_method, alpha_num = alpha_num, lag = lag, degree = degree, l1_ratio = l1_ratio, label_name = True, trans_type = 'auto')
+        mystring = 'IC_optimal'
     else:
-        DALVEN_hyper, DALVEN_model, DALVEN_params, mse_train_DALVEN, mse_test_DALVEN, yhat_train_DALVEN, yhat_test_DALVEN, MSE_v_DALVEN, final_list = cv.CV_mse(model_name,
-                X, y, X_test, y_test, cv_method, K_fold, Nr, alpha_num = alpha_num, lag = lag, degree = degree, l1_ratio = l1_ratio, label_name = True, trans_type = 'auto', robust_priority = robust_priority)
+        mystring = 'mse_val'
+    DALVEN_hyper, DALVEN_model, DALVEN_params, mse_train_DALVEN, mse_test_DALVEN, yhat_train_DALVEN, yhat_test_DALVEN, MSE_v_DALVEN, final_list = cv.CV_mse(model_name,
+            X, y, X_test, y_test, cv_method, K_fold, Nr, alpha_num = alpha_num, lag = lag, degree = degree, l1_ratio = l1_ratio, label_name = True, trans_type = 'auto', robust_priority = robust_priority)
 
-    return {'model_hyper': DALVEN_hyper,'final_model': DALVEN_model, 'model_params': DALVEN_params , 'mse_train': mse_train_DALVEN, 'mse_val': MSE_v_DALVEN,
+    return {'model_hyper': DALVEN_hyper,'final_model': DALVEN_model, 'model_params': DALVEN_params , 'mse_train': mse_train_DALVEN, mystring: MSE_v_DALVEN,
             'mse_test': mse_test_DALVEN, 'yhat_train': yhat_train_DALVEN, 'yhat_test': yhat_test_DALVEN, 'final_list': final_list}
 
