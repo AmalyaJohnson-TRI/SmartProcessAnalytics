@@ -3,7 +3,6 @@ Original work by Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com, https
 Modified by Pedro Seber, https://github.com/PedroSeber/SmartProcessAnalytics
 """
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
 import RNN_feedback as RNN_fd
 import matplotlib.pyplot as plt
 import numpy as np
@@ -72,8 +71,14 @@ def timeseries_RNN_feedback_single_train(X_train, y_train, X_val = None, y_val =
 
     # Load and pre-process the data
     if X_val is None:
-        X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size = val_ratio) # TODO: should we go back to X_train[:num_train] because we're dealing with timeseries data?
-    num_train = X_train.shape[0]
+        num_train = round(X_train.shape[0] * (1-val_ratio))
+        X_val = X_train[num_train:]
+        y_val = y_train[num_train:]
+        X_train = X_train[:num_train]
+        y_train = y_train[:num_train]
+    else:
+        num_train = X_train.shape[0]
+
     if X_test is not None:
         num_test = X_test.shape[0]
     x_num_features = X_train.shape[1]
@@ -93,9 +98,10 @@ def timeseries_RNN_feedback_single_train(X_train, y_train, X_val = None, y_val =
         X_test = scaler.transform(X_test)
         y_test = scalery.transform(y_test)
 
-    g_train = RNN_fd.build_multilayer_rnn_graph_with_dynamic_rnn(cell_type, RNN_layers, activation, num_steps, x_num_features, y_num_features, learning_rate, lambda_l2_reg)
-    train_loss, val_loss, num_parameter = RNN_fd.train_rnn(X_train, y_train, X_val, y_val, g_train, num_epochs, num_steps, batch_size, input_prob, output_prob, state_prob, 
-                                                      epoch_before_val, max_checks_without_progress, epoch_overlap, verbose = True, save = save_location)
+    g_train = RNN_fd.build_multilayer_rnn_graph_with_dynamic_rnn(cell_type, RNN_layers, activation, num_steps, x_num_features, y_num_features, learning_rate,
+                                            lambda_l2_reg, input_prob, output_prob, state_prob)
+    train_loss, val_loss, num_parameter = RNN_fd.train_rnn(X_train, y_train, X_val, y_val, g_train, num_epochs, num_steps, batch_size, input_prob, output_prob,
+                                            state_prob, epoch_before_val, max_checks_without_progress, epoch_overlap, verbose = True, save = save_location)
     val_loss = np.array(val_loss)
     if plot:
         plt.figure()
@@ -217,10 +223,16 @@ def timeseries_RNN_feedback_multi_train(X_train, y_train, timeindex_train, X_val
     """
     # Load and pre-process the data
     if X_val is None:
-        X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size = val_ratio) # TODO: should we go back to X_train[:num_train] because we're dealing with timeseries data?
+        num_train = round(X_train.shape[0] * (1-val_ratio))
+        X_val = X_train[num_train:]
+        y_val = y_train[num_train:]
+        X_train = X_train[:num_train]
+        y_train = y_train[:num_train]
+    else:
+        num_train = X_train.shape[0]
+
     if timeindex_val is None:
         timeindex_val = timeindex_train
-    num_train = X_train.shape[0]
     if X_test is not None:
         num_test = X_test.shape[0]
     x_num_features = X_train.shape[1]
