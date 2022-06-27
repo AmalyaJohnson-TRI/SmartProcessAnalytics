@@ -7,8 +7,14 @@ from dataset_property_new import nonlinearity_assess, collinearity_assess, resid
 import cv_final as cv
 from sklearn.preprocessing import StandardScaler
 from copy import deepcopy
+# To read input files
 from os.path import splitext
 from pandas import read_excel, read_csv
+# To save the results
+import json
+import pickle
+from time import localtime
+# Convenience imports
 from matplotlib import style
 style.use('default')
 import warnings
@@ -414,7 +420,29 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
             warnings.warn(f'{model} is not a valid model name, so it was ignored.')
     if 'selected_model' not in locals():
         raise UnboundLocalError(f'You input {model_name} for model_name, but that is not a valid name.')
-    print(f'The best model is {selected_model}. View its results via fitting_result["{selected_model}"].')
+
+    # Setup for saving
+    time_now = '-'.join([str(elem) for elem in localtime()[:6]]) # YYYY-MM-DD-hh-mm-ss
+    # jsons do not work with numpy arrays - converting to list
+    fr2 = fitting_result.copy()
+    for model in fr2.keys():
+        del fr2[model]['final_model'] # Models aren't convertible to json
+        for top_key, top_value in fr2[model].items():
+            if isinstance(fr2[model][top_key], dict):
+                for key, value in fr2[model][top_key].items():
+                    if isinstance(value, np.ndarray):
+                        fr2[model][top_key][key] = value.tolist()
+            elif isinstance(top_value, np.ndarray):
+                fr2[model][top_key] = top_value.squeeze().tolist()
+    # Saving as a pickled file
+    with open(f'SPA_results_{time_now}.p', 'wb') as f:
+        pickle.dump(fitting_result, f)
+    # Saving as a json file
+    #pdb.set_trace()
+    with open(f'SPA_results_{time_now}.json', 'w') as f:
+        json.dump(fr2, f, indent = 4)
+
+    print(f'The best model is {selected_model}. View its results via fitting_result["{selected_model}"] or by opening the SPA_results json/pickle files.')
     return fitting_result, selected_model
 
 def load_file(filename):
