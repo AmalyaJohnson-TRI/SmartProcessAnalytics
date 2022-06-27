@@ -584,32 +584,50 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         if 'select_value' not in kwargs:
             kwargs['select_pvalue'] = 0.05
 
-        MSE_result = np.empty((len(kwargs['degree']), alpha_num, len(kwargs['l1_ratio']), len(kwargs['lag']), K_fold*Nr)) * np.nan
-        if kwargs['robust_priority']:
-            Var = np.empty((len(kwargs['degree']), alpha_num, len(kwargs['l1_ratio']), len(kwargs['lag']), K_fold*Nr)) * np.nan
-
-        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+        if 'IC' in cv_type: # Information criterion
+            IC_result = np.zeros( (len(kwargs['degree']), alpha_num, len(kwargs['l1_ratio']), len(kwargs['lag'])) )
             for k in range(len(kwargs['degree'])):
                 for j in range(len(kwargs['l1_ratio'])):
                     for i in range(alpha_num):
                         for t in range(len(kwargs['lag'])):
-                            _, variable, _, mse, _, _, _, _, _ = DALVEN(X_train, y_train, X_val, y_val, alpha = i, l1_ratio = kwargs['l1_ratio'][j],
-                                                degree = kwargs['degree'][k], lag = kwargs['lag'][t], tol = eps , alpha_num = alpha_num, cv = True,
-                                                selection = 'p_value', select_value = kwargs['select_pvalue'], trans_type = kwargs['trans_type'])
-                            MSE_result[k, i, j, t, counter] = mse
-                            if kwargs['robust_priority']:
-                                Var[k, i, j, t, counter] = np.sum(variable.flatten() != 0)
+                            _, _, _, _, _, _ , _, _, (AIC,AICc,BIC) = DALVEN(X, y, X_test, y_test, alpha = i, l1_ratio = kwargs['l1_ratio'][j],
+                                                        degree = kwargs['degree'][k], lag = kwargs['lag'][t], tol = eps, alpha_num = alpha_num, cv = True,
+                                                        selection = 'p_value', select_value = kwargs['select_pvalue'], trans_type = kwargs['trans_type'])
+                            if cv_type == 'AICc':
+                                IC_result[k,i,j,t] = AICc
+                            elif cv_type == 'BIC':
+                                IC_result[k,i,j,t] = BIC
+                            else:
+                                IC_result[k,i,j,t] = AIC
+            # Min IC value (first occurrence)
+            ind = np.unravel_index(np.argmin(IC_result, axis=None), IC_result.shape)
+        else: # Cross-validation
+            MSE_result = np.empty((len(kwargs['degree']), alpha_num, len(kwargs['l1_ratio']), len(kwargs['lag']), K_fold*Nr)) * np.nan
+            if kwargs['robust_priority']:
+                Var = np.empty((len(kwargs['degree']), alpha_num, len(kwargs['l1_ratio']), len(kwargs['lag']), K_fold*Nr)) * np.nan
 
-        MSE_mean = np.nanmean(MSE_result, axis = 4)
-        # Min MSE value (first occurrence)
-        ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
-        if kwargs['robust_priority']:
-            MSE_std = np.nanstd(MSE_result, axis = 4)
-            MSE_min = MSE_mean[ind]
-            MSE_bar = MSE_min + MSE_std[ind]
-            Var_num = np.nansum(Var, axis = 4)
-            ind = np.nonzero( Var_num == np.nanmin(Var_num[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
-            ind = (ind[0][0], ind[1][0], ind[2][0], ind[3][0])
+            for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+                for k in range(len(kwargs['degree'])):
+                    for j in range(len(kwargs['l1_ratio'])):
+                        for i in range(alpha_num):
+                            for t in range(len(kwargs['lag'])):
+                                _, variable, _, mse, _, _, _, _, _ = DALVEN(X_train, y_train, X_val, y_val, alpha = i, l1_ratio = kwargs['l1_ratio'][j],
+                                                    degree = kwargs['degree'][k], lag = kwargs['lag'][t], tol = eps , alpha_num = alpha_num, cv = True,
+                                                    selection = 'p_value', select_value = kwargs['select_pvalue'], trans_type = kwargs['trans_type'])
+                                MSE_result[k, i, j, t, counter] = mse
+                                if kwargs['robust_priority']:
+                                    Var[k, i, j, t, counter] = np.sum(variable.flatten() != 0)
+
+            MSE_mean = np.nanmean(MSE_result, axis = 4)
+            # Min MSE value (first occurrence)
+            ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
+            if kwargs['robust_priority']:
+                MSE_std = np.nanstd(MSE_result, axis = 4)
+                MSE_min = MSE_mean[ind]
+                MSE_bar = MSE_min + MSE_std[ind]
+                Var_num = np.nansum(Var, axis = 4)
+                ind = np.nonzero( Var_num == np.nanmin(Var_num[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
+                ind = (ind[0][0], ind[1][0], ind[2][0], ind[3][0])
 
         # Hyperparameter setup
         degree = kwargs['degree'][ind[0]]
@@ -691,7 +709,11 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
 
         else:
             list_name_final =  []
-        return(hyperparams, DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind], list_name_final)
+        
+        if 'IC' in cv_type:
+            return(hyperparams, DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, IC_result[ind], list_name_final)
+        else:
+            return(hyperparams, DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind], list_name_final)
 
     elif model_name == 'RNN':
         import timeseries_regression_RNN as RNN
@@ -731,7 +753,7 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         state_prob_test = 1
 
         # Early stopping
-        if 'val_ratio' not in kwargs:
+        if 'val_ratio' not in kwargs and X_val is None:
             kwargs['val_ratio'] = 0.2
         else:
             kwards['val_ratio'] = 0
@@ -745,32 +767,50 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         if 'plot' not in kwargs:
             kwargs['plot'] = False
 
-        MSE_result = np.empty((len(kwargs['cell_type']), len(kwargs['activation']), len(kwargs['RNN_layers']), K_fold*Nr)) * np.nan
-        if kwargs['robust_priority']:
-            S = np.empty((len(kwargs['cell_type']), len(kwargs['activation']), len(kwargs['RNN_layers']), K_fold*Nr)) * np.nan
-
-        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, cv_type, K_fold, Nr, group = group)):
+        if 'IC' in cv_type: # Information criterion
+            IC_result = np.zeros( (len(kwargs['cell_type']), len(kwargs['activation']), len(kwargs['RNN_layers'])) )
             for i in range(len(kwargs['cell_type'])):
                 for j in range(len(kwargs['activation'])):
                     for k in range(len(kwargs['RNN_layers'])):
-                        _, _, _, _, _, val_loss, _ = RNN.timeseries_RNN_feedback_single_train(X, y, X_val, y_val, None, None, kwargs['val_ratio'], kwargs['cell_type'][i],
-                                kwargs['activation'][j], kwargs['RNN_layers'][k], kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'],
-                                kwargs['lambda_l2_reg'], kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test,
-                                output_prob_test, state_prob_test, kwargs['max_checks_without_progress'], kwargs['epoch_before_val'], kwargs['save_location'], plot = False)
-                        MSE_result[i, j, k, counter] = val_loss
-                        if kwargs['robust_priority']:
-                            S[i, j, k, counter] = k + i + j # TODO: is this scoring system correct? It ignores the actual values of the paramters, caring only about their positions in the array.
+                        _, _, _, (AIC,AICc,BIC), _, _, _ = RNN.timeseries_RNN_feedback_single_train(X, y, X_val, y_val, None, None, kwargs['val_ratio'], kwargs['cell_type'][i],
+                                    kwargs['activation'][j], kwargs['RNN_layers'][k], kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'],
+                                    kwargs['lambda_l2_reg'], kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test,
+                                    output_prob_test, state_prob_test, kwargs['max_checks_without_progress'], kwargs['epoch_before_val'], kwargs['save_location'], plot = False)
+                        if cv_type == 'AICc':
+                            IC_result[i,j,k] = AICc
+                        elif cv_type == 'BIC':
+                            IC_result[i,j,k] = BIC
+                        else:
+                            IC_result[i,j,k] = AIC
+            # Min IC value (first occurrence)
+            ind = np.unravel_index(np.argmin(IC_result, axis=None), IC_result.shape)
+        else: # Cross-validation
+            MSE_result = np.empty((len(kwargs['cell_type']), len(kwargs['activation']), len(kwargs['RNN_layers']), K_fold*Nr)) * np.nan
+            if kwargs['robust_priority']:
+                S = np.empty((len(kwargs['cell_type']), len(kwargs['activation']), len(kwargs['RNN_layers']), K_fold*Nr)) * np.nan
 
-        MSE_mean = np.nanmean(MSE_result, axis = 3)
-        # Min MSE value (first occurrence)
-        ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
-        if kwargs['robust_priority']:
-            MSE_std = np.nanstd(MSE_result, axis = 3)
-            MSE_min = MSE_mean[ind]
-            MSE_bar = MSE_min + MSE_std[ind]
-            S_val = np.nansum(S, axis = 3)
-            ind = np.nonzero( S_val == np.nanmin(S_val[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
-            ind = (ind[0][0], ind[1][0], ind[2][0])
+            for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, cv_type, K_fold, Nr, group = group)):
+                for i in range(len(kwargs['cell_type'])):
+                    for j in range(len(kwargs['activation'])):
+                        for k in range(len(kwargs['RNN_layers'])):
+                            _, _, _, _, _, val_loss, _ = RNN.timeseries_RNN_feedback_single_train(X, y, X_val, y_val, None, None, kwargs['val_ratio'], kwargs['cell_type'][i],
+                                    kwargs['activation'][j], kwargs['RNN_layers'][k], kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'],
+                                    kwargs['lambda_l2_reg'], kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test,
+                                    output_prob_test, state_prob_test, kwargs['max_checks_without_progress'], kwargs['epoch_before_val'], kwargs['save_location'], plot = False)
+                            MSE_result[i, j, k, counter] = val_loss
+                            if kwargs['robust_priority']:
+                                S[i, j, k, counter] = k + i + j # TODO: is this scoring system correct? It ignores the actual values of the paramters, caring only about their positions in the array.
+
+            MSE_mean = np.nanmean(MSE_result, axis = 3)
+            # Min MSE value (first occurrence)
+            ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
+            if kwargs['robust_priority']:
+                MSE_std = np.nanstd(MSE_result, axis = 3)
+                MSE_min = MSE_mean[ind]
+                MSE_bar = MSE_min + MSE_std[ind]
+                S_val = np.nansum(S, axis = 3)
+                ind = np.nonzero( S_val == np.nanmin(S_val[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
+                ind = (ind[0][0], ind[1][0], ind[2][0])
 
         # Hyperparameter setup
         cell_type = kwargs['cell_type'][ind[0]]
@@ -780,7 +820,7 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         prediction_train, prediction_val, prediction_test, _, train_loss_final, val_loss_final, test_loss_final = RNN.timeseries_RNN_feedback_single_train(X, y, None, None, X_test, y_test,
                 kwargs['val_ratio'], cell_type, activation, RNN_layers, kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'], kwargs['lambda_l2_reg'],
                 kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test, output_prob_test, state_prob_test, kwargs['max_checks_without_progress'],
-                kwargs['epoch_before_val'], kwargs['save_location'], plot = kwargs['plot'])
+                kwargs['epoch_before_val'], kwargs['save_location'], kwargs['plot'])
 
         hyperparams = {}
         hyperparams['cell_type'] = cell_type
@@ -790,6 +830,9 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
                                         'lambda_l2_reg': kwargs['lambda_l2_reg'], 'num_epochs': kwargs['num_epochs']}
         hyperparams['drop_out'] = {'input_prob': kwargs['input_prob'], 'output_prob': kwargs['output_prob'], 'state_prob': kwargs['state_prob']}
         hyperparams['early_stop'] = {'val_ratio': kwargs['val_ratio'], 'max_checks_without_progress': kwargs['max_checks_without_progress'], 'epoch_before_val': kwargs['epoch_before_val']}
-        hyperparams['MSE_val'] = MSE_mean[ind]
+        if 'IC' in cv_type:
+            hyperparams['IC_optimal'] = IC_result[ind]
+        else:
+            hyperparams['MSE_val'] = MSE_mean[ind]
         return(hyperparams, kwargs['save_location'], prediction_train, prediction_val, prediction_test, train_loss_final, val_loss_final, test_loss_final)
 
