@@ -29,7 +29,7 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
             degree = [1, 2, 3], num_outer = 10, K_steps = 1, l1_ratio = [0.1], RNN_activation = ['relu'], RNN_layers = None, RNN_cell = ['basic'],
             RNN_batch_size = 1, RNN_epoch_overlap = None, RNN_past_steps = 10, RNN_max_checks_without_progress = 50, RNN_learning_rate = 1e-3,
             RNN_lambda_l2_reg = 1e-3, RNN_num_epochs = 200, maxorder = 10, ADAPTx_path = None, ADAPTx_save_path = None, ADAPTx_max_lag = 12,
-            ADAPTx_degrees = [-1, 0, 1]):
+            ADAPTx_degrees = [-1, 0, 1], diagnostics = None):
     """
     The main SPA function, which calls all other functions needed for model building.
 
@@ -114,8 +114,8 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
         An array in which each entry is a container with the number of neurons in each layer.
         The length of each container array is the number of hidden layers.
         e.g.: [[512, 256]] tests a single RNN with 2 hidden layers, one with 512 ...
-            neurons and the other with 256 neurons. [[512, 256], [256, 256]] would ...
-            test 2 RNNs, each with 2 hidden layers, and so on.
+            neurons and the other with 256 neurons. [[512, 256], [256, 256]] tests ...
+            2 RNNs, each with 2 hidden layers, and so on.
         If None, is automatically set to [[X_train.shape[1]]] = m (a double list).
     RNN_cell : list of str, optional, default = ['basic']
         The cell type(s) of the RNN.
@@ -153,6 +153,11 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
     ADAPTx_degrees : list of int, optional, default = [-1, 0, 1]
         Degrees of trend t in ADAPTx
         Relevant only when ADAPTx_path is not None.
+    diagnostics : list of bool, optional, default = None
+        A list of length 2 indicating whether the data are nonlinear ...
+            and whether the data are multicollinear.
+        Shouldn't be created by the user. SPA returns this, and further ...
+        calls to SPA with the same data should use the returned value.
     """
     # Loading group (the actual data) from group_name (a path)
     if group_name:
@@ -187,13 +192,18 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
 
     # Selecting a model
     if model_name is None:
-        # Determining nonlinearity and multicollinearity automatically
-        nonlinear = nonlinearity_assess(X_original, y_original, plot_interrogation, cat = cat, alpha = alpha, difference = 0.4, xticks = xticks, yticks = yticks, round_number = 0)
-        multicollinear = collinearity_assess(X_original, y_original, plot_interrogation, xticks =  xticks, yticks = yticks, round_number = 0) # Had an int() call
-        if not nonlinear and dynamic_model:
-            nonlinear_dynamic = nonlinearity_assess_dynamic(X_original, y_original, plot_interrogation, alpha = alpha, difference = 0.4, xticks = xticks, yticks = yticks, round_number = 0, lag = lag)
-            if nonlinear_dynamic:
-                nonlinear = True
+        if diagnostics is None:
+            # Determining nonlinearity and multicollinearity automatically
+            nonlinear = nonlinearity_assess(X_original, y_original, plot_interrogation, cat = cat, alpha = alpha, difference = 0.4, xticks = xticks, yticks = yticks, round_number = 0)
+            multicollinear = collinearity_assess(X_original, y_original, plot_interrogation, xticks =  xticks, yticks = yticks, round_number = 0) # Had an int() call
+            if not nonlinear and dynamic_model:
+                nonlinear_dynamic = nonlinearity_assess_dynamic(X_original, y_original, plot_interrogation, alpha = alpha, difference = 0.4, xticks = xticks, yticks = yticks, round_number = 0, lag = lag)
+                if nonlinear_dynamic:
+                    nonlinear = True
+            diagnostics = (nonlinear, multicollinear)
+        else: # Another SPA run has already determined these parameters
+            nonlinear = diagnostics[0]
+            multicollinear = diagnostics[1]
 
         if nonlinear:
             # Nonlinear, nondynamic models
@@ -296,13 +306,6 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
         final_model, model_params, mse_train, mse_test, yhat_train, yhat_test = OLS_fitting(X_scale, y_scale, X_test_scale, y_test_scale, 0)
         fitting_result['OLS'] = {'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_test':mse_test, 'yhat_train':yhat_train, 'yhat_test':yhat_test}
         selected_model = 'OLS'
-       
-        # Determing whether a dynamic model should have been used
-        yhat_test = scaler_y.inverse_transform(fitting_result[selected_model]['yhat_test'])
-        _, dynamic_model = residual_analysis(X_test, y_test, yhat_test, plot = plot_interrogation, alpha = alpha, round_number = round_number)
-        if dynamic_model:
-            print('A residual analysis found dynamics in the system. Please run SPA again with dynamic_model = True')
-            print('Note that specifying a non-dynamic model will override the dynamic_model flag')
 
     # Non-dynamic models
     if any(temp_model in model_name for temp_model in {'ALVEN', 'SVR', 'RF', 'RR', 'PLS', 'EN', 'PLS', 'SPLS'}) and 'OLS' not in model_name: # TODO: how do we compare OLS with the other models if OLS doesn't have validation scores?
@@ -355,14 +358,6 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
             local_selected_model = model_name[np.nanargmin(np.mean(val_err, axis=1))]
             fitting_result[local_selected_model], _ = run_cv_nondynamic(selected_model, X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale,
                     cv_method, group, K_fold, Nr, alpha_num, l1_ratio, robust_priority)
-
-        if 'OLS' not in model_name: # We don't want to print the same message twice
-            # Determing whether a dynamic model should have been used
-            yhat_test = scaler_y.inverse_transform(fitting_result[local_selected_model]['yhat_test'])
-            _, dynamic_model = residual_analysis(X_test, y_test, yhat_test, plot = plot_interrogation, alpha = alpha, round_number = round_number)
-            if dynamic_model:
-                print('A residual analysis found dynamics in the system. Please run SPA again with dynamic_model = True')
-                print('Note that specifying a non-dynamic model will override the dynamic_model flag')
 
     # Dynamic models
     if 'RNN' in model_name:
@@ -421,6 +416,13 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
     if 'selected_model' not in locals():
         raise UnboundLocalError(f'You input {model_name} for model_name, but that is not a valid name.')
 
+    # Residual analysis + test for dynamics in the residual
+    yhat_test_dynamics = scaler_y.inverse_transform(fitting_result[selected_model]['yhat_test'])
+    _, dynamic_test_result = residual_analysis(X_test, y_test, yhat_test_dynamics, plot = plot_interrogation, alpha = alpha, round_number = selected_model)
+    if dynamic_test_result and not(dynamic_model) and selected_model not in {'RNN', 'DALVEN', 'DALVEN_full_nonlinear', 'ADAPTx'}: # TODO: Get the names of the MATLAB models and add them here
+        print('A residual analysis found dynamics in the system. Please run SPA again with dynamic_model = True')
+        print('Note that specifying a non-dynamic model will override the dynamic_model flag')
+
     # Setup for saving
     time_now = '-'.join([str(elem) for elem in localtime()[:6]]) # YYYY-MM-DD-hh-mm-ss
     # jsons do not work with numpy arrays - converting to list
@@ -443,7 +445,7 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
         json.dump(fr2, f, indent = 4)
 
     print(f'The best model is {selected_model}. View its results via fitting_result["{selected_model}"] or by opening the SPA_results json/pickle files.')
-    return fitting_result, selected_model
+    return fitting_result, selected_model, diagnostics
 
 def load_file(filename):
     """
@@ -461,7 +463,7 @@ def load_file(filename):
         my_file = read_csv(filename, header = None, sep = '\t').values
     elif ext in {'.xls', '.xlsx'}:
         my_file = read_excel(filename, header = None).values
-    else: # TODO: JSON support?
+    else:
         raise ValueError(f'Please provide a filename with extension in {{.txt, .csv, .tsv, .xls, .xlsx}}. You passed {filename}')
     return my_file
 
