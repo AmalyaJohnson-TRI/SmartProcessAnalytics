@@ -32,7 +32,7 @@ def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference 
         X: independent variables of size N x m
         y: dependent variable of size N x 1
         plot: flag for plotting
-        alpha: significance level for quaratic testing
+        alpha: significance level for quadratic testing
         difference: significance level for maximal correlation - linear correlation
     
     Output:
@@ -173,7 +173,7 @@ def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference 
                        cbar_kws={'label': 'p-value of quadratic test',"orientation": "horizontal",'ticks' : [plot_threshold**2,plot_threshold,1]}) 
         loc, labels = plt.yticks()
         ax.set_yticklabels(labels, rotation=0)
-        plt.savefig('quaradtic_test_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
+        plt.savefig('quadratic_test_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
 
         # Plot maximal correlation
         plt.figure(figsize=(X.shape[1],3))
@@ -465,7 +465,7 @@ def nonlinearity_assess_dynamic(X, y, plot = True, cat = None, alpha = 0.01, dif
         X: independent variables of size N x m
         y: dependent variable of size N x 1
         plot: flag for plotting
-        alpha: significance level for quaratic testing
+        alpha: significance level for quadratic testing
         difference: significance level for maximal correlation - linear correlation
     
     Output:
@@ -562,7 +562,7 @@ def nonlinearity_assess_dynamic(X, y, plot = True, cat = None, alpha = 0.01, dif
                        cbar_kws={'label': 'p-value of quadratic test',"orientation": "horizontal",'ticks' : [plot_threshold**2,plot_threshold,1]}) 
         loc, labels = plt.yticks()
         ax.set_yticklabels(labels, rotation=0)
-        plt.savefig('quaradtic_test_' + str(round_number)+ 'lag'+str(lag)+'.png', dpi = 600,bbox_inches='tight')
+        plt.savefig('quadratic_test_' + str(round_number)+ 'lag'+str(lag)+'.png', dpi = 600,bbox_inches='tight')
 
         # Plot maximal correlation
         plt.figure(figsize=(X.shape[1]+1,lag))
