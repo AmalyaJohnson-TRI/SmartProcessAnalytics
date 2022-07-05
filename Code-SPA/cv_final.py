@@ -3,14 +3,16 @@ Original work by Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com, https
 Modified by Pedro Seber, https://github.com/PedroSeber/SmartProcessAnalytics
 """
 import numpy as np
-from sklearn.model_selection import KFold, RepeatedKFold, ShuffleSplit, TimeSeriesSplit, GroupKFold, GroupShuffleSplit
-import regression_models as rm
+from sklearn.model_selection import KFold, RepeatedKFold, ShuffleSplit, TimeSeriesSplit, GroupKFold, GroupShuffleSplit, train_test_split
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.linear_model import Ridge
-import nonlinear_regression as nr
-from sklearn.model_selection import train_test_split
-import nonlinear_regression_other as nro
 from sklearn.feature_selection import VarianceThreshold
+from sklearn.utils._testing import ignore_warnings
+import regression_models as rm
+import nonlinear_regression as nr
+import nonlinear_regression_other as nro
+from itertools import product
+from joblib import Parallel, delayed
 import pdb
 
 def CVpartition(X, y, Type = 'Re_KFold', K = 5, Nr = 10, random_state = 0, group = None):
@@ -372,7 +374,7 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         return(hyperparams, RR_model, RR_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name == 'ALVEN':
-        ALVEN = rm.model_getter(model_name)
+        # ALVEN = rm.model_getter(model_name)
         if 'l1_ratio' not in kwargs:
             kwargs['l1_ratio'] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99][::-1]
         if 'degree' not in kwargs:
@@ -384,37 +386,32 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         if 'select_value' not in kwargs:
             kwargs['ALVEN_select_pvalue'] = 0.10
 
-        MSE_result = np.empty((len(kwargs['degree']), alpha_num, len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan
-        if kwargs['robust_priority']:
-            Var = np.empty((len(kwargs['degree']), alpha_num, len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan
+        MSE_result = np.empty((len(kwargs['degree']) * alpha_num * len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan
+        Var = np.empty((len(kwargs['degree']) * alpha_num * len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan # Used when robust_priority == True
+        hyperparam_prod = list(product(kwargs['degree'], kwargs['l1_ratio'], range(alpha_num)))
 
-        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
-            for k in range(len(kwargs['degree'])):
-                for j in range(len(kwargs['l1_ratio'])):
-                    for i in range(alpha_num):
-                        _, variable, _, mse, _, _ , _, _ = ALVEN(X_train, y_train, X_val, y_val, alpha = i, l1_ratio = kwargs['l1_ratio'][j],
-                                                    degree = kwargs['degree'][k], tol = eps , alpha_num = alpha_num, cv = True,
-                                                    selection = 'p_value', select_value = kwargs['ALVEN_select_pvalue'], trans_type = kwargs['trans_type'])
-                        MSE_result[k, i, j, counter] = mse
-                        if kwargs['robust_priority']:
-                            Var[k, i, j, counter] = np.sum(variable.flatten() != 0)
+        with Parallel(n_jobs = -1) as PAR:
+            for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+                temp = PAR(delayed(_ALVEN_joblib_fun)(X_train, y_train, X_val, y_val,
+                        this_prod, eps, alpha_num, kwargs) for this_prod in hyperparam_prod)
+                MSE_result[:, counter], Var[:, counter] = zip(*temp)
 
-        MSE_mean = np.nanmean(MSE_result, axis = 3)
+        MSE_mean = np.nanmean(MSE_result, axis = 1)
         # Min MSE value (first occurrence)
-        ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
+        ind = np.nanargmin(MSE_mean)
         if kwargs['robust_priority']:
-            MSE_std = np.nanstd(MSE_result, axis = 3)
+            MSE_std = np.nanstd(MSE_result, axis = 1)
             MSE_min = MSE_mean[ind]
             MSE_bar = MSE_min + MSE_std[ind]
-            Var_num = np.nansum(Var, axis = 3)
+            Var_num = np.nansum(Var, axis = 1)
             ind = np.nonzero( Var_num == np.nanmin(Var_num[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
-            ind = (ind[0][0], ind[1][0], ind[2][0])
+            ind = ind[0][0]
 
         # Hyperparameter setup
-        degree = kwargs['degree'][ind[0]]
-        l1_ratio = kwargs['l1_ratio'][ind[2]]
+        degree = hyperparam_prod[ind][0]
+        l1_ratio = hyperparam_prod[ind][1]
 
-        ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index = ALVEN(X,y, X_test, y_test, alpha = ind[1],
+        ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index = rm.ALVEN_fitting(X,y, X_test, y_test, alpha = hyperparam_prod[ind][2], # Was ind[1]
                                                 l1_ratio = l1_ratio, degree = degree, tol = eps , alpha_num = alpha_num, cv = False,
                                                 selection = 'p_value', select_value = kwargs['ALVEN_select_pvalue'], trans_type = kwargs['trans_type'])
         hyperparams = {}
@@ -835,4 +832,14 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         else:
             hyperparams['MSE_val'] = MSE_mean[ind]
         return(hyperparams, kwargs['save_location'], prediction_train, prediction_val, prediction_test, train_loss_final, val_loss_final, test_loss_final)
+
+@ignore_warnings()
+def _ALVEN_joblib_fun(X_train, y_train, X_val, y_val, this_prod, eps, alpha_num, kwargs):
+    """
+    A helper function to parallelize ALVEN. Shouldn't be called by the user
+    """
+    _, variable, _, mse, _, _ , _, _ = rm.ALVEN_fitting(X_train, y_train, X_val, y_val, alpha = this_prod[2], l1_ratio = this_prod[1],
+                                degree = this_prod[0], tol = eps , alpha_num = alpha_num, cv = True, selection = 'p_value',
+                                select_value = kwargs['ALVEN_select_pvalue'], trans_type = kwargs['trans_type'])
+    return mse, np.sum(variable.flatten() != 0)
 
