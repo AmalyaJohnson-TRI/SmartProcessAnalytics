@@ -13,6 +13,8 @@ import nonlinear_regression as nr
 import nonlinear_regression_other as nro
 from itertools import product
 from joblib import Parallel, delayed
+from tensorflow.keras.losses import MeanSquaredError
+MSE = MeanSquaredError()
 import pdb
 
 def CVpartition(X, y, Type = 'Re_KFold', K = 5, Nr = 10, random_state = 0, group = None):
@@ -313,7 +315,7 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
                 PLS = PLSRegression(scale = False, n_components = int(kwargs['K'][i]), tol = eps).fit(X_train, y_train)
                 PLS_para = PLS.coef_.reshape(-1,1)
                 yhat = np.dot(X_val, PLS_para)
-                MSE_result[i, counter] = rm.mse(y_val, yhat)
+                MSE_result[i, counter] = MSE(y_val.flatten(), yhat.flatten()).numpy()
 
         MSE_mean = np.nanmean(MSE_result, axis = 1)
         # Min MSE value (first occurrence)
@@ -334,8 +336,8 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         PLS_params = PLS_model.coef_.reshape(-1,1)
         yhat_train = np.dot(X, PLS_params)
         yhat_test = np.dot(X_test, PLS_params)
-        mse_train = rm.mse(yhat_train, y)
-        mse_test = rm.mse(yhat_test, y_test)
+        mse_train = MSE(yhat_train.flatten(), y.flatten()).numpy()
+        mse_test = MSE(yhat_test.flatten(), y_test.flatten()).numpy()
         return(hyperparams, PLS_model, PLS_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name == 'RR':
@@ -350,7 +352,7 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
                 RR = Ridge(alpha = kwargs['alpha'][i], fit_intercept = False).fit(X_train, y_train)
                 Para = RR.coef_.reshape(-1,1)
                 yhat = np.dot(X_val, Para)
-                MSE_result[i, counter] = rm.mse(y_val, yhat)
+                MSE_result[i, counter] = MSE(y_val.flatten(), yhat.flatten()).numpy()
 
         MSE_mean = np.nanmean(MSE_result, axis = 1)
         # Min MSE value (first occurrence)
@@ -371,8 +373,8 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         RR_params = RR_model.coef_.reshape(-1,1)
         yhat_train = np.dot(X, RR_params)
         yhat_test = np.dot(X_test, RR_params)
-        mse_train = rm.mse(yhat_train, y)
-        mse_test = rm.mse(yhat_test, y_test)
+        mse_train = MSE(yhat_train.flatten(), y.flatten()).numpy()
+        mse_test = MSE(yhat_test.flatten(), y_test.flatten()).numpy()
         return(hyperparams, RR_model, RR_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name == 'ALVEN':
