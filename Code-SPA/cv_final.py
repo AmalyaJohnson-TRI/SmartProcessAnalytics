@@ -276,7 +276,7 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
             X_trans = np.hstack((np.ones([X_trans.shape[0], 1]), X_trans))
             for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_trans, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
                 _, _, _, mse, _, _ = OLS(X_train, y_train, X_val, y_val)
-                MSE_result[d, counter] += mse
+                MSE_result[d, counter] = mse
 
         MSE_mean = np.nanmean(MSE_result, axis = 1)
         # Min MSE value (first occurrence)
@@ -385,10 +385,12 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
             kwargs['degree'] = [1, 2, 3]
         if 'label_name' not in kwargs:
             kwargs['label_name'] = False
-        if 'trans_type' not in kwargs:
-            kwargs['trans_type'] = 'auto'
+        if 'selection' not in kwargs:
+            kwargs['selection'] = 'p_value'
         if 'select_value' not in kwargs:
             kwargs['select_value'] = 0.10
+        if 'trans_type' not in kwargs:
+            kwargs['trans_type'] = 'auto'
         if 'use_cross_entropy' not in kwargs:
             kwargs['use_cross_entropy'] = False
 
@@ -405,7 +407,6 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         print('')
 
         MSE_mean = np.nanmean(MSE_result, axis = 1)
-        # Min MSE value (first occurrence)
         ind = np.nanargmin(MSE_mean)
         if kwargs['robust_priority']:
             MSE_std = np.nanstd(MSE_result, axis = 1)
@@ -418,10 +419,11 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         # Hyperparameter setup
         degree = hyperparam_prod[ind][0]
         l1_ratio = hyperparam_prod[ind][1]
+        alpha = hyperparam_prod[ind][2]
 
-        ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index = rm.ALVEN_fitting(X,y, X_test, y_test, alpha = hyperparam_prod[ind][2],
-                                                l1_ratio = l1_ratio, degree = degree, tol = eps , alpha_num = alpha_num, cv = False,
-                                                selection = 'p_value', select_value = kwargs['select_value'], trans_type = kwargs['trans_type'])
+        ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index = rm.ALVEN_fitting(X, y, X_test, y_test, alpha,
+                                                l1_ratio, degree, alpha_num, tol = eps, cv = False, selection = kwargs['selection'],
+                                                select_value = kwargs['select_value'], trans_type = kwargs['trans_type'])
         hyperparams = {}
         hyperparams['alpha'] = alpha
         hyperparams['l1_ratio'] = l1_ratio
@@ -576,6 +578,7 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
 
     elif model_name == 'DALVEN' or model_name == 'DALVEN_full_nonlinear':
         DALVEN = rm.model_getter(model_name)
+        kwargs['model_name'] = model_name
         if 'l1_ratio' not in kwargs:
             kwargs['l1_ratio'] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99][::-1]
         if 'degree' not in kwargs:
@@ -584,68 +587,58 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
             kwargs['lag'] =  [i+1 for i in range(40)]
         if 'label_name' not in kwargs:
             kwargs['label_name'] = False
-        if 'trans_type' not in kwargs:
-            kwargs['trans_type'] = 'auto'
+        if 'selection' not in kwargs:
+            kwargs['selection'] = 'p_value'
         if 'select_value' not in kwargs:
             kwargs['select_value'] = 0.05
+        if 'trans_type' not in kwargs:
+            kwargs['trans_type'] = 'auto'
         if 'use_cross_entropy' not in kwargs:
             kwargs['use_cross_entropy'] = False
 
-        if 'IC' in cv_type: # Information criterion
-            IC_result = np.zeros( (len(kwargs['degree']), alpha_num, len(kwargs['l1_ratio']), len(kwargs['lag'])) )
-            for k in range(len(kwargs['degree'])):
-                for j in range(len(kwargs['l1_ratio'])):
-                    for i in range(alpha_num):
-                        for t in range(len(kwargs['lag'])):
-                            _, _, _, _, _, _ , _, _, (AIC,AICc,BIC) = DALVEN(X, y, X_test, y_test, alpha = i, l1_ratio = kwargs['l1_ratio'][j],
-                                                    degree = kwargs['degree'][k], lag = kwargs['lag'][t], tol = eps, alpha_num = alpha_num, cv = True,
-                                                    selection = 'p_value', select_value = kwargs['select_value'], trans_type = kwargs['trans_type'],
-                                                    use_cross_entropy = kwargs['use_cross_entropy'])
-                            if cv_type == 'AICc':
-                                IC_result[k,i,j,t] = AICc
-                            elif cv_type == 'BIC':
-                                IC_result[k,i,j,t] = BIC
-                            else:
-                                IC_result[k,i,j,t] = AIC
-            # Min IC value (first occurrence)
-            ind = np.unravel_index(np.argmin(IC_result, axis=None), IC_result.shape)
-        else: # Cross-validation
-            MSE_result = np.empty((len(kwargs['degree']), alpha_num, len(kwargs['l1_ratio']), len(kwargs['lag']), K_fold*Nr)) * np.nan
-            if kwargs['robust_priority']:
-                Var = np.empty((len(kwargs['degree']), alpha_num, len(kwargs['l1_ratio']), len(kwargs['lag']), K_fold*Nr)) * np.nan
+        hyperparam_prod = list(product(kwargs['degree'], kwargs['l1_ratio'], range(alpha_num), kwargs['lag']))
+        print(f'There are {len(hyperparam_prod)} hyperparameter combinations')
 
-            for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
-                for k in range(len(kwargs['degree'])):
-                    for j in range(len(kwargs['l1_ratio'])):
-                        for i in range(alpha_num):
-                            for t in range(len(kwargs['lag'])):
-                                _, variable, _, mse, _, _, _, _, _ = DALVEN(X_train, y_train, X_val, y_val, alpha = i, l1_ratio = kwargs['l1_ratio'][j],
-                                                    degree = kwargs['degree'][k], lag = kwargs['lag'][t], tol = eps , alpha_num = alpha_num, cv = True,
-                                                    selection = 'p_value', select_value = kwargs['select_value'], trans_type = kwargs['trans_type'],
-                                                    use_cross_entropy = kwargs['use_cross_entropy'])
-                                MSE_result[k, i, j, t, counter] = mse
-                                if kwargs['robust_priority']:
-                                    Var[k, i, j, t, counter] = np.sum(variable.flatten() != 0)
+        with Parallel(n_jobs = -1) as PAR:
+            if 'IC' in cv_type: # Information criterion
+                temp = PAR(delayed(_DALVEN_joblib_fun)(X_train, y_train, X_val, y_val, eps, alpha_num, kwargs, counter,
+                        prod_idx, this_prod) for prod_idx, this_prod in enumerate(hyperparam_prod))
+                if cv_type == 'AICc':
+                    IC_result = zip(*temp)[2][1]
+                elif cv_type == 'BIC':
+                    IC_result = zip(*temp)[2][2]
+                else: # AIC
+                    IC_result = zip(*temp)[2][0]
+                # Min IC value (first occurrence)
+                ind = np.argmin(IC_result)
+            else: # Cross-validation
+                MSE_result = np.empty((len(kwargs['degree']) * alpha_num * len(kwargs['l1_ratio']) * len(kwargs['lag']), K_fold*Nr)) * np.nan
+                Var = np.empty((len(kwargs['degree']) * alpha_num * len(kwargs['l1_ratio']) * len(kwargs['lag']), K_fold*Nr)) * np.nan
+                for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+                    temp = PAR(delayed(_DALVEN_joblib_fun)(X_train, y_train, X_val, y_val, eps, alpha_num, kwargs, counter,
+                            prod_idx, this_prod) for prod_idx, this_prod in enumerate(hyperparam_prod))
+                    MSE_result[:, counter], Var[:, counter], _ = zip(*temp)
 
-            MSE_mean = np.nanmean(MSE_result, axis = 4)
-            # Min MSE value (first occurrence)
-            ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
-            if kwargs['robust_priority']:
-                MSE_std = np.nanstd(MSE_result, axis = 4)
-                MSE_min = MSE_mean[ind]
-                MSE_bar = MSE_min + MSE_std[ind]
-                Var_num = np.nansum(Var, axis = 4)
-                ind = np.nonzero( Var_num == np.nanmin(Var_num[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
-                ind = (ind[0][0], ind[1][0], ind[2][0], ind[3][0])
+                MSE_mean = np.nanmean(MSE_result, axis = 1)
+                ind = np.nanargmin(MSE_mean)
+                if kwargs['robust_priority']:
+                    MSE_std = np.nanstd(MSE_result, axis = 1)
+                    MSE_min = MSE_mean[ind]
+                    MSE_bar = MSE_min + MSE_std[ind]
+                    Var_num = np.nansum(Var, axis = 1)
+                    ind = np.nonzero( Var_num == np.nanmin(Var_num[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
+                    ind = ind[0][0]
+        print('')
 
         # Hyperparameter setup
-        degree = kwargs['degree'][ind[0]]
-        l1_ratio = kwargs['l1_ratio'][ind[2]]
-        lag = kwargs['lag'][ind[3]]
+        degree = hyperparam_prod[ind][0]
+        l1_ratio = hyperparam_prod[ind][1]
+        alpha = hyperparam_prod[ind][2]
+        lag = hyperparam_prod[ind][3]
 
-        DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index, _ = DALVEN(X, y, X_test, y_test, alpha = ind[1],
-                                                    l1_ratio = l1_ratio, degree =  degree, lag = lag, tol = eps , alpha_num = alpha_num, cv = False,
-                                                    selection = 'p_value', select_value = kwargs['select_value'], trans_type = kwargs['trans_type'])
+        DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index, _ = DALVEN(X, y, X_test, y_test, alpha,
+                                                    l1_ratio, degree, lag, alpha_num, tol = eps, cv = False, selection = kwargs['selection'],
+                                                    select_value = kwargs['select_value'], trans_type = kwargs['trans_type'])
         hyperparams = {}
         hyperparams['alpha'] = alpha
         hyperparams['l1_ratio'] = l1_ratio
@@ -657,14 +650,14 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         if kwargs['label_name'] :
             if model_name == 'DALVEN': # DALVEN does transform first, then lag
                 if kwargs['trans_type'] == 'auto':
-                    X, _ = nr.feature_trans(X, degree = degree, interaction = 'later')
+                    Xt, _ = nr.feature_trans(X, degree = degree, interaction = 'later')
                 else:
-                    X, _ = nr.poly_feature(X, degree = degree, interaction = True, power = True)
+                    Xt, _ = nr.poly_feature(X, degree = degree, interaction = True, power = True)
 
                 # Lag padding for X
-                XD = X[lag:]
+                XD = Xt[lag:]
                 for i in range(lag):
-                    XD = np.hstack((XD, X[lag-1-i : -i-1]))
+                    XD = np.hstack((XD, Xt[lag-1-i : -i-1]))
                 # Lag padding for y in design matrix
                 for i in range(lag):
                     XD = np.hstack((XD, y[lag-1-i : -i-1]))
@@ -866,7 +859,23 @@ def _ALVEN_joblib_fun(X_train, y_train, X_val, y_val, eps, alpha_num, kwargs, co
     """
     print(f'Beginning run {prod_idx+1:3} of fold {counter+1:3}', end = '\r')
     _, variable, _, mse, _, _ , _, _ = rm.ALVEN_fitting(X_train, y_train, X_val, y_val, alpha = this_prod[2], l1_ratio = this_prod[1],
-                                degree = this_prod[0], tol = eps , alpha_num = alpha_num, cv = True, selection = 'p_value',
+                                degree = this_prod[0], tol = eps , alpha_num = alpha_num, cv = True, selection = kwargs['selection'],
                                 select_value = kwargs['select_value'], trans_type = kwargs['trans_type'], use_cross_entropy = kwargs['use_cross_entropy'])
     return mse, np.sum(variable.flatten() != 0)
+
+@ignore_warnings()
+def _DALVEN_joblib_fun(X_train, y_train, X_val, y_val, eps, alpha_num, kwargs, counter, prod_idx, this_prod):
+    """
+    A helper function to parallelize DALVEN. Shouldn't be called by the user
+    """
+    print(f'Beginning run {prod_idx+1:3} of fold {counter+1:3}', end = '\r')
+    if kwargs['model_name'] == 'DALVEN':
+        _, variable, _, mse, _, _ , _, _, ICs = rm.DALVEN_fitting(X_train, y_train, X_val, y_val, alpha = this_prod[2], l1_ratio = this_prod[1],
+                                    degree = this_prod[0], lag = this_prod[3], tol = eps , alpha_num = alpha_num, cv = True, selection = kwargs['selection'],
+                                    select_value = kwargs['select_value'], trans_type = kwargs['trans_type'], use_cross_entropy = kwargs['use_cross_entropy'])
+    else:
+        _, variable, _, mse, _, _ , _, _, ICs = rm.DALVEN_fitting_full_nonlinear(X_train, y_train, X_val, y_val, alpha = this_prod[2], l1_ratio = this_prod[1],
+                                    degree = this_prod[0], lag = this_prod[3], tol = eps , alpha_num = alpha_num, cv = True, selection = kwargs['selection'],
+                                    select_value = kwargs['select_value'], trans_type = kwargs['trans_type'], use_cross_entropy = kwargs['use_cross_entropy'])
+    return mse, np.sum(variable.flatten() != 0), ICs
 
