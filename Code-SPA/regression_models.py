@@ -88,7 +88,7 @@ def EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter = 10000, tol = 1e
     EN_model.fit(X, y)
     yhat_train = EN_model.predict(X).reshape((-1,1))
     if use_cross_entropy:
-        mse_train = CCE(y, yhat_train).numpy()
+        mse_train = CCE(y.flatten(), yhat_train.flatten()).numpy()
     else:
         mse_train = MSE(y, yhat_train).numpy()
     EN_params = EN_model.coef_.reshape((-1,1)) # Fitted parameters
@@ -96,7 +96,7 @@ def EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter = 10000, tol = 1e
     # Testing
     yhat_test = EN_model.predict(X_test).reshape((-1,1))
     if use_cross_entropy:
-        mse_test = CCE(y_test, yhat_test).numpy()
+        mse_test = CCE(y_test.flatten(), yhat_test.flatten()).numpy()
     else:
         mse_test = MSE(y_test, yhat_test).numpy()
     return (EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test)
