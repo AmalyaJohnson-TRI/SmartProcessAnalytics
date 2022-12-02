@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
     name = 'Smart Process Analytics',
     author = 'Original by Vicky Sun, modified by Pedro Seber',
-    author_email = 'pedro.seber@mit.edu',
+    author_email = 'pseber@mit.edu',
     license = 'MIT',
     version = '1.1.0',
     description = 'A software for predictive modeling.',
