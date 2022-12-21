@@ -91,7 +91,7 @@ def CVpartition(X, y, Type = 'Re_KFold', K = 5, Nr = 10, random_state = 0, group
     else:
         raise ValueError(f'{Type} is not a valid CV type.')
 
-def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, Nr = 1000, eps = 1e-4, alpha_num = 20, group = None, **kwargs):
+def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, Nr = 10, eps = 1e-4, alpha_num = 20, group = None, **kwargs):
     """
     Determines the best hyperparameters using MSE based on information criteria.
     Also returns MSE and yhat data for the chosen model.
@@ -117,6 +117,9 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
     **kwargs : dict, optional
         Non-default hyperparameters for model fitting.
     """
+    if 'robust_priority' not in kwargs: # This should not be the case unless the user called this function manually, which is not recommended
+        kwargs['robust_priority'] = False
+
     if model_name == 'EN':
         EN = rm.model_getter(model_name)
         if 'l1_ratio' not in kwargs:
