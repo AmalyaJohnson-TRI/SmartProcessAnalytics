@@ -3,14 +3,16 @@ Original work by Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com
 Modified by Pedro Seber
 """
 import numpy as np
-import ace_R
+try:
+    import ace_R
+except:
+    print('ace_R is not installed. This will lead to errors if SPA tries to automatically determine the linearity of your system')
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
 from scipy.stats import f
 import matplotlib.pyplot as plt
 import seaborn as sns
 from matplotlib.colors import LogNorm
-import math
 import pandas as pd
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 import statsmodels.stats.api as sms
@@ -163,7 +165,7 @@ def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference 
         # Plot the quadratic test results
         plt.figure(figsize=(X.shape[1],3))
         # Calcaultate the rejection threhsold (default alpha=0.01 for one test)
-        plot_threshold = math.floor(np.log10(q_test_threshold))
+        plot_threshold = int(np.floor(np.log10(q_test_threshold)))
         plot_threshold = 10**plot_threshold
         # Set lower bar
         low_value_flags = QT < plot_threshold**2
@@ -552,7 +554,7 @@ def nonlinearity_assess_dynamic(X, y, plot = True, cat = None, alpha = 0.01, dif
         plt.figure(figsize=(X.shape[1]+1,lag))
         # Calculate the rejection threhsold (default alpha=0.01 for one test)
         q_test_threshold = alpha/np.shape(QT)[0]/np.shape(QT)[1]
-        plot_threshold = math.floor(np.log10(q_test_threshold))
+        plot_threshold = int(np.floor(np.log10(q_test_threshold)))
         plot_threshold = 10**plot_threshold
         # Set lower bar
         low_value_flags = QT < plot_threshold**2
