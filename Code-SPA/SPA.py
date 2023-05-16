@@ -235,8 +235,7 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
                 model_name = ['EN','SPLS']
             else:
                 print('As your data have significant multicollinearity and you do not require an interpretable model, EN, SPLS, RR, and PLS will be used.')
-                #model_name = ['EN','SPLS','RR','PLS']
-                model_name = ['EN', 'RR', 'PLS']
+                model_name = ['EN','SPLS','RR','PLS']
         # Linear dynamic model
         else:
             print('As your data have significant dynamics and multicolinearity, SS will be used.') # Originally CVA, SSARX, and MOSEP
@@ -419,10 +418,10 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
         raise UnboundLocalError(f'You input {model_name} for model_name, but that is not a valid name.')
 
     # Residual analysis + test for dynamics in the residual
-    fitting_result[selected_model]['yhat_train_nontrans'] = scaler_y.inverse_transform(fitting_result[selected_model]['yhat_train'])
+    fitting_result[selected_model]['yhat_train_nontrans'] = scaler_y.inverse_transform(np.atleast_2d(fitting_result[selected_model]['yhat_train']))
     fitting_result[selected_model]['yhat_train_nontrans_mean'] = np.mean(fitting_result[selected_model]['yhat_train_nontrans'])
     fitting_result[selected_model]['yhat_train_nontrans_stdev'] = np.std(fitting_result[selected_model]['yhat_train_nontrans'])
-    fitting_result[selected_model]['yhat_test_nontrans'] = scaler_y.inverse_transform(fitting_result[selected_model]['yhat_test'])
+    fitting_result[selected_model]['yhat_test_nontrans'] = scaler_y.inverse_transform(np.atleast_2d(fitting_result[selected_model]['yhat_test']))
     fitting_result[selected_model]['yhat_test_nontrans_mean'] = np.mean(fitting_result[selected_model]['yhat_test_nontrans'])
     fitting_result[selected_model]['yhat_test_nontrans_stdev'] = np.std(fitting_result[selected_model]['yhat_test_nontrans'])
     if len(y_test.squeeze()) >= 4: # TODO: residuals with small lengths lead to errors when plotting ACF. Need to figure out why

@@ -15,7 +15,6 @@ from itertools import product
 from joblib import Parallel, delayed
 from tensorflow.keras.losses import MeanSquaredError
 MSE = MeanSquaredError()
-import pdb
 
 def CVpartition(X, y, Type = 'Re_KFold', K = 5, Nr = 10, random_state = 0, group = None):
     """
@@ -187,11 +186,11 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         return(hyperparams, EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name == 'SPLS':
-        SPLS = rm.model_getter(model_name)
+        SPLS = rm.SPLS_fitting
         if not(cv_type.startswith('Group')) and 'K' not in kwargs: # For non-grouped CV types
-            kwargs['K'] = np.linspace( 1, min(X.shape[1], int((K_fold-1)/K_fold * X.shape[0] - 1)), min(X.shape[1], int((K_fold-1)/K_fold * X.shape[0] - 1)) )
+            kwargs['K'] = np.linspace( 1, min(X.shape[1], int((K_fold-1)/K_fold * X.shape[0] - 1)), min(X.shape[1], int((K_fold-1)/K_fold * X.shape[0] - 1)), dtype = np.uint64)
         elif 'K' not in kwargs:
-            kwargs['K'] = np.linspace(1, min(X.shape[1], X.shape[0]-1), min(X.shape[1], X.shape[0]-1))
+            kwargs['K'] = np.linspace(1, min(X.shape[1], X.shape[0]-1), min(X.shape[1], X.shape[0]-1), dtype = np.uint64)
 
         if 'eta' not in kwargs:
             kwargs['eta'] = np.linspace(0, 1, 20, endpoint = False)[::-1] #eta = 0 -> use normal PLS
@@ -220,7 +219,7 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
             ind = (ind[0][0], ind[1][0])
 
         # Hyperparameter setup
-        K = kwargs['K'][ind[0]]
+        K = int(kwargs['K'][ind[0]])
         eta = kwargs['eta'][ind[1]]
         hyperparams = {}
         hyperparams['K'] = int(K)
