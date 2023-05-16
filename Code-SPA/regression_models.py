@@ -3,8 +3,10 @@ Original work by Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com, https
 Modified by Pedro Seber, https://github.com/PedroSeber/SmartProcessAnalytics
 """
 import statsmodels.api as sm
-from SPLS import SPLS_fitting_method
+#from SPLS import SPLS_fitting_method
+from SPLS_Python import SPLS
 from sklearn.linear_model import ElasticNet, Lasso, Ridge
+from sklearn.cross_decomposition import PLSRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import f_regression, VarianceThreshold
 import numpy as np
@@ -13,6 +15,8 @@ import nonlinear_regression as nr
 from tensorflow.keras.losses import MeanSquaredError, CategoricalCrossentropy
 MSE = MeanSquaredError()
 CCE = CategoricalCrossentropy()
+import warnings
+warnings.filterwarnings("ignore") # TODO: Want to just ignore the PLS constant residual warnings, but this will do for now
 
 def model_getter(model_name):
     '''Return the model according to the name'''
@@ -50,7 +54,7 @@ def OLS_fitting(X, y, X_test, y_test):
     mse_test = MSE(y_test, yhat_test).numpy()
     return(OLS_model, OLS_params, mse_train, mse_test, yhat_train, yhat_test)
 
-def SPLS_fitting(X, y, X_test, y_test, K = None, eta = None, maxstep = 1000):
+def SPLS_fitting(X, y, X_test, y_test, K = None, eta = None, eps = 1e-4, maxstep = 1000):
     """
     Fits data using an Sparse PLS model coded in R
 
@@ -65,7 +69,16 @@ def SPLS_fitting(X, y, X_test, y_test, K = None, eta = None, maxstep = 1000):
     eta: float, optional, default = None
         Sparsity tuning parameter ranging from 0 to 1
     """
-    return SPLS_fitting_method(X, y, X_test, y_test, K = K, eta = eta, maxstep = maxstep)
+    _, selected_variables, _, _ = SPLS(X, y, K, eta, eps = eps, max_steps = maxstep)
+    SPLS_model = PLSRegression(K, scale = False, tol = eps).fit(X[:, selected_variables], y)
+    SPLS_params = SPLS_model.coef_.squeeze()
+    # Predictions and MSEs
+    yhat_train = np.dot(X[:, selected_variables], SPLS_params)
+    yhat_test = np.dot(X_test[:, selected_variables], SPLS_params)
+    mse_train = MSE(y, yhat_train).numpy()
+    mse_test = MSE(y_test, yhat_test).numpy()
+
+    return SPLS_model, SPLS_params, mse_train, mse_test, yhat_train, yhat_test
 
 def EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter = 10000, tol = 1e-4, use_cross_entropy = False):
     """
