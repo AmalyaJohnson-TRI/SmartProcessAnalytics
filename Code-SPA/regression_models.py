@@ -3,7 +3,6 @@ Original work by Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com, https
 Modified by Pedro Seber, https://github.com/PedroSeber/SmartProcessAnalytics
 """
 import statsmodels.api as sm
-#from SPLS import SPLS_fitting_method
 from SPLS_Python import SPLS
 from sklearn.linear_model import ElasticNet, Lasso, Ridge
 from sklearn.cross_decomposition import PLSRegression
