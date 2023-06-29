@@ -21,7 +21,8 @@ setup(
         'rpy2==3.5.1',
         'openpyxl==3.0.9',
         'xlrd==2.0.1',
-        'tensorflow==2.8.1'
+        'tensorflow==2.8.1',
+        'ace-cream>=0.4'
         ],
     )
 
