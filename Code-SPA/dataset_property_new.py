@@ -3,10 +3,7 @@ Original work by Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com
 Modified by Pedro Seber
 """
 import numpy as np
-try:
-    import ace_R
-except:
-    print('ace_R is not installed. This will lead to errors if SPA tries to automatically determine the linearity of your system')
+from ace_cream import ace_cream as ace
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
 from scipy.stats import f
@@ -48,20 +45,17 @@ def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference 
     N = np.shape(X)[0]
     
     if plot:
-        print('=== Scatter plot of the dataset ===')
-        # Visualize the data
         dataset = np.concatenate((X,y.reshape((-1,1))), axis = 1)
-        
         if xticks is None:
             xticks = [r'x$_'+str(i)+'$' for i in range(1,np.shape(X)[1]+1)]
         name = xticks[:] + yticks[:]
-        dataset=pd.DataFrame(data= dataset, columns =name)
+        dataset = pd.DataFrame(dataset, columns = name)
 
         if m <= 10:
             plt.figure(figsize=(X.shape[1]*2,X.shape[1]*2)) 
             sns.set(font_scale=1.5)
             sns.pairplot(dataset)
-            plt.savefig('pairplot_' + str(round_number)+'.png',dpi = 600,bbox_inches='tight')
+            plt.savefig(f'pairplot_{round_number}.png', dpi = 600, bbox_inches='tight')
         
         # Compute the correlation matrix
         corr = dataset.corr()
@@ -72,8 +66,8 @@ def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference 
         s=17
         sns.set(font_scale=1.3) 
         plt.tick_params(labelsize=s)
-        sns.heatmap(corr, cmap='RdBu',square=True,vmin=-1,vmax=1,linecolor="white", linewidths=0.8, ax=ax,annot=True,cbar_kws={"shrink": .82})
-        plt.savefig('corrplot'+ str(round_number)+'.png', dpi = 600,bbox_inches='tight')
+        sns.heatmap(corr, cmap='RdBu', square=True, vmin=-1, vmax=1, linecolor="white", linewidths=0.8, ax=ax, annot=True, cbar_kws={"shrink": .82})
+        plt.savefig(f'corrplot{round_number}.png', dpi = 600, bbox_inches='tight')
  
     # Pre-processing the data
     scaler_x = StandardScaler()
@@ -88,32 +82,28 @@ def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference 
         scaler_B.fit(Bi)
         Bi=scaler_B.transform(Bi)
 
-    LC = np.zeros((m,1))
-    QT = np.zeros((m,1))
-    MC = np.zeros((m,1))
-    
+    LC = np.corrcoef(X.T, y.squeeze())[:-1, -1]
+    QT = np.zeros(m)
+    MC = np.zeros(m)
     for i in range(m):
-        # Linear correlation
-        LC[i] = np.corrcoef(X[:,i],y.squeeze())[0,1]
-
-        # Quaratic test
-        reg = LinearRegression(fit_intercept=False).fit(X[:,i].reshape(-1, 1), y.reshape(-1, 1))
+        # Quadratic test
+        reg = LinearRegression(fit_intercept=False).fit(X[:,i].reshape(-1, 1), y)
         y_pred = reg.predict(X[:,i].reshape(-1, 1))
-        mse1 = np.sum((y.reshape(-1, 1)-y_pred)**2)
-        regq = LinearRegression(fit_intercept=False).fit(np.array([X[:,i]**2, X[:,i]]).transpose(), y.reshape(-1, 1))
-        yq_pred = regq.predict(np.array([X[:,i]**2, X[:,i]]).transpose())
-        mse2 = np.sum((y.reshape(-1, 1)-yq_pred)**2)
-        F = (mse1- mse2)/(mse2/(N-2))
+        mse1 = np.sum((y - y_pred)**2)
+        reg_quad = LinearRegression(fit_intercept=False).fit(np.array([X[:,i]**2, X[:,i]]).transpose(), y)
+        yquad_pred = reg_quad.predict(np.array([X[:,i]**2, X[:,i]]).transpose())
+        mse2 = np.sum((y - yquad_pred)**2)
+        F = (mse1 - mse2)/(mse2/(N-2))
         p_value = 1 - f.cdf(F, 1, N-2)
         QT[i] = 0 if p_value < 10*np.finfo(float).eps else p_value
-                
         # Maximal correlation by ACE algorithm
         if cat is None or cat[i] == 0:
-            MC[i] = ace_R.ace_R(X[:,i].reshape(-1, 1), y)
+            tx, ty = ace(X[:, i].reshape(-1, 1), y)
         else:
-            MC[i] = ace_R.ace_R(X[:,i].reshape(-1, 1), y, cat=1)
+            tx, ty = ace(X[:, i].reshape(-1, 1), y, cat = [0]) # cat is a list with the indices of the X columns that are categorical - in this case, X has only one col, so its idx is 0
+        MC[i] = np.corrcoef(tx.squeeze(), ty.squeeze())[0, 1]
     
-    # Bilinear 
+    # Bilinear
     if m > 1:
         p_values = np.zeros((Bi.shape[1],1))
         bi_test_threshold = alpha/np.shape(p_values)[0]
@@ -147,76 +137,71 @@ def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference 
     q_test_threshold = alpha/np.shape(QT)[0]
     
     if plot:
-        print('=== Nonlinearity test results ===')
         # Plot for linear correlation
         cmap = sns.diverging_palette(10,250, as_cmap=True)
         if xticks is None:
             xticks = [r'x$_'+str(i)+'$' for i in range(1,np.shape(X)[1]+1)]
-        plt.figure(figsize=(X.shape[1],3))
+        plt.figure(figsize=(X.shape[1], 3))
         sns.set(font_scale=1.6)
         sns.set_style("whitegrid")
-        ax=sns.heatmap(LC.transpose(),linewidths=0.8,vmin=-1,vmax=1,cmap=cmap,annot=True,\
-                       linecolor="white",annot_kws={"size": 14},xticklabels=xticks,square=True,\
-                       yticklabels=yticks, cbar_kws={'label': 'linear correlation',"orientation": "horizontal",'ticks' : [-1,0,1]}) 
+        ax=sns.heatmap(np.atleast_2d(LC), linewidths=0.8, vmin=-1, vmax=1, cmap=cmap, annot=True,\
+                       linecolor="white", annot_kws={"size": 14}, xticklabels=xticks, square=True,\
+                       yticklabels=yticks, cbar_kws={'label': 'linear correlation', "orientation": "horizontal", 'ticks': [-1,0,1]})
         loc, labels = plt.yticks()
         ax.set_yticklabels(labels, rotation=0)
-        plt.savefig('linear_correlation_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
+        plt.savefig(f'linear_correlation_{round_number}.png', dpi = 600, bbox_inches='tight')
         
         # Plot the quadratic test results
-        plt.figure(figsize=(X.shape[1],3))
+        plt.figure(figsize=(X.shape[1], 3))
         # Calcaultate the rejection threhsold (default alpha=0.01 for one test)
         plot_threshold = int(np.floor(np.log10(q_test_threshold)))
         plot_threshold = 10**plot_threshold
         # Set lower bar
         low_value_flags = QT < plot_threshold**2
         QT[low_value_flags] = plot_threshold**2
-        ax=sns.heatmap(QT.transpose(),linewidths=0.8,vmin=plot_threshold**2,vmax=1,cmap="Blues",annot=True, norm=LogNorm(),\
-                       linecolor="white",annot_kws={"size": 14},xticklabels=xticks,square=True,yticklabels=yticks,\
-                       cbar_kws={'label': 'p-value of quadratic test',"orientation": "horizontal",'ticks' : [plot_threshold**2,plot_threshold,1]}) 
+        ax=sns.heatmap(np.atleast_2d(QT), linewidths=0.8, vmin=plot_threshold**2, vmax=1, cmap="Blues", annot=True, norm=LogNorm(),\
+                       linecolor="white", annot_kws={"size": 14}, xticklabels=xticks, square=True, yticklabels=yticks,\
+                       cbar_kws={'label': 'p-value of quadratic test', "orientation": "horizontal", 'ticks': [plot_threshold**2,plot_threshold,1]})
         loc, labels = plt.yticks()
         ax.set_yticklabels(labels, rotation=0)
-        plt.savefig('quadratic_test_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
+        plt.savefig(f'quadratic_test_{round_number}.png', dpi = 600, bbox_inches='tight')
 
         # Plot maximal correlation
-        plt.figure(figsize=(X.shape[1],3))
-        ax=sns.heatmap(MC.transpose(),linewidths=0.8,vmin=0,vmax=1,cmap="Blues",annot=True,\
-                       linecolor="white",annot_kws={"size": 14},xticklabels=xticks,square=True,yticklabels=yticks,\
-                       cbar_kws={'label': 'maximal correlation',"orientation": "horizontal",'ticks' : [0,0.5,1]}) 
+        plt.figure(figsize=(X.shape[1], 3))
+        ax=sns.heatmap(np.atleast_2d(MC), linewidths=0.8, vmin=0, vmax=1, cmap="Blues", annot=True,\
+                       linecolor="white", annot_kws={"size": 14}, xticklabels=xticks, square=True, yticklabels=yticks,\
+                       cbar_kws={'label': 'maximal correlation', "orientation": "horizontal", 'ticks': [0,0.5,1]})
         loc, labels = plt.yticks()
         ax.set_yticklabels(labels, rotation=0)
-        plt.savefig('maximal_correlation_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
+        plt.savefig(f'maximal_correlation_{round_number}.png', dpi = 600, bbox_inches='tight')
         
         # Bilinear term
-        if m>1:
+        if m > 1:
         # Generate a mask for the upper triangle
             mask = np.zeros_like(tri, dtype=np.bool)
             mask[np.tril_indices_from(mask, k=-1)] = True
-            s=17
-    
             # Set up the matplotlib figure
             sns.set_style("white")
-            fig, ax = plt.subplots(figsize=(2*(m-1),2*(m-1)))
-            sns.set(font_scale=1.3)
-            plt.tick_params(labelsize=s)
+            fig, ax = plt.subplots(figsize = (2*(m-1),2*(m-1)))
+            sns.set(font_scale = 1.3)
+            plt.tick_params(labelsize = 17)
             plot_threshold = 0.15
-            sns.heatmap(tri, cmap="Blues", mask=mask,square=True,vmin=0,vmax=1,linecolor="white", linewidths=0.8, ax=ax,annot=True,cbar_kws={"shrink": .82, 'ticks' : [0, 0.15, 0.5, 1]})
+            sns.heatmap(tri, cmap="Blues", mask=mask, square=True, vmin=0, vmax=1, linecolor="white", linewidths=0.8, ax=ax, annot=True, cbar_kws={"shrink": .82, 'ticks': [0, 0.15, 0.5, 1]})
             ax.set_xticklabels(xticks[1:])
             ax.set_yticklabels(xticks[:-1])
             plt.title('p_values for bilinear terms')
-            plt.savefig('f_bilinear_'+ str(round_number)+'.png', dpi = 600,bbox_inches='tight')
+            plt.savefig(f'f_bilinear_{round_number}.png', dpi = 600, bbox_inches='tight')
 
-    # Detemine whether nonlinearity is significant
-    corr_difference = MC - abs(LC) > difference # Default 0.4, for maximal correlation
-    corr_absolute   = [a and b for a,b in zip(MC > 0.92, MC - abs(LC)>0.1)]
+    # Determine whether nonlinearity is significant
+    corr_difference = np.any(MC - abs(LC) > difference)
+    corr_absolute = np.any((MC > 0.92) & (MC - abs(LC) > 0.1))
     corr_difference = corr_absolute or corr_difference
-    q_test = QT<q_test_threshold # For quadratic test
+    q_test = np.any(QT < q_test_threshold) # Quadratic test
     if m > 1:
-        bi_test = p_values < bi_test_threshold
-        overall_result = np.concatenate((corr_difference, q_test, bi_test), axis=0) # overall result
-        return int(True in overall_result) # True = nonlinear correlation
+        bi_test = np.any(p_values < bi_test_threshold)
     else:
-        overall_result = np.concatenate((corr_difference, q_test), axis=0) # overall result
-        return int(True in overall_result)
+        bi_test = False
+    return int(corr_difference or corr_absolute or q_test or bi_test)
 
 def collinearity_assess(X, y, plot = True, xticks = None , yticks = ['y'], round_number = 0):
     """
@@ -245,24 +230,18 @@ def collinearity_assess(X, y, plot = True, xticks = None , yticks = ['y'], round
     elif np.shape(X)[1] > np.shape(X)[0]:
         return 1
     else:
-        VIF = [variance_inflation_factor(X, i) for i in range(0,np.shape(X)[1])]
+        VIF = [variance_inflation_factor(X, i) for i in range(0, np.shape(X)[1])]
         if plot:
-            print('=== Multicollinearity Results ===')
             if xticks is None:
-                xticks = [r'x$_'+str(i)+'$' for i in range(1,np.shape(X)[1]+1)]
+                xticks = [r'x$_'+str(i)+'$' for i in range(1, np.shape(X)[1]+1)]
             plt.figure(figsize=(X.shape[1],3))
             sns.set(font_scale=1.6)
             sns.set_style("whitegrid")
-            ax=sns.heatmap(np.array(VIF).reshape(1,-1),linewidths=0.8,vmin=1,vmax=10,cmap='Blues',annot=True,\
-                               linecolor="white",annot_kws={"size": 14},xticklabels=xticks,square=True,\
-                               yticklabels=yticks, cbar_kws={'label': 'variance inflation factor',"orientation": "horizontal",'ticks' : [1, 5, 10]}) 
-            plt.savefig('VIF_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
-            
-        # Check whether VIF > 5
-        for i in range(0,np.shape(X)[1]):
-            if VIF[i] > 5:
-                return int(True)
-        return int(False)
+            ax=sns.heatmap(np.array(VIF).reshape(1,-1), linewidths=0.8, vmin=1, vmax=10, cmap='Blues', annot=True,\
+                               linecolor="white", annot_kws={"size": 14}, xticklabels=xticks, square=True,\
+                               yticklabels=yticks, cbar_kws={'label': 'variance inflation factor', "orientation": "horizontal", 'ticks': [1, 5, 10]})
+            plt.savefig(f'VIF_{round_number}.png', dpi = 600, bbox_inches='tight')
+        return int( np.any(np.array(VIF) > 5) )
         
 def dynamic_assess(x, plot = True, y = None, round_number = 0, alpha = 0.01, freq = 1):
     """
@@ -298,14 +277,14 @@ def dynamic_assess(x, plot = True, y = None, round_number = 0, alpha = 0.01, fre
     if y is not None and plot:
         plt.figure(figsize=(5,3))
         plt.xcorr(x,y, normed = True, usevlines=True, maxlags=20)
-        plt.axhline(y=2.575*1/np.sqrt(x.shape[0]), color='blue', linestyle='--',alpha=0.9) # 99% confidence interval
-        plt.axhline(y=-2.575*1/np.sqrt(x.shape[0]), color='blue', linestyle='--',alpha=0.9) # 99% confidence interval
+        plt.axhline(y = 2.575/np.sqrt(x.shape[0]), color='blue', linestyle='--', alpha=0.9) # 99% confidence interval
+        plt.axhline(y = -2.575/np.sqrt(x.shape[0]), color='blue', linestyle='--', alpha=0.9) # 99% confidence interval
         font = 15
-        plt.title('Cross-correlation plot',fontsize=font)
-        plt.xlabel('Lag',fontsize=font)
-        plt.tick_params(labelsize=font-1)
+        plt.title('Cross-correlation plot', fontsize = font)
+        plt.xlabel('Lag', fontsize = font)
+        plt.tick_params(labelsize = font-1)
         plt.tight_layout()
-        plt.savefig('CCF_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
+        plt.savefig(f'CCF_{round_number}.png', dpi = 600, bbox_inches='tight')
     
     # FFT
     x = x.squeeze()
@@ -326,7 +305,7 @@ def dynamic_assess(x, plot = True, y = None, round_number = 0, alpha = 0.01, fre
         plt.xlabel('frequncy (Hz)', fontsize = font)
         plt.ylabel('|P1(f)|', fontsize = font)
         plt.tight_layout()
-        plt.savefig('FFT_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')  
+        plt.savefig(f'FFT_{round_number}.png', dpi = 600, bbox_inches='tight')
     return (acf_lag, pacf_lag)
   
 def residual_analysis(X, y, y_hat, plot = True, nlag = None, alpha = 0.01, round_number = 0, log_transform = False):
@@ -352,7 +331,7 @@ def residual_analysis(X, y, y_hat, plot = True, nlag = None, alpha = 0.01, round
         # ytrain = np.exp(ytrain)
         # ytrain_hat = np.exp(ytrain_hat)
 
-    residual = y-y_hat
+    residual = y - y_hat
     RMSE = np.sqrt(np.mean((residual)**2))
     APE = np.mean(np.abs((residual) / y)) * 100
     print(f'RMSE = {RMSE}')
@@ -369,14 +348,14 @@ def residual_analysis(X, y, y_hat, plot = True, nlag = None, alpha = 0.01, round
     # Basic Residual Plot
     if plot:
         fig, ax = plt.subplots(1,1,figsize=(4,3))
-        plt.plot(y,y_hat,'*')
-        sm.qqline(ax=ax, line='45', fmt='k--')
-        plt.ylabel('fitted y', fontsize=14)
-        plt.xlabel('y', fontsize=14)
+        plt.plot(y, y_hat, '*')
+        sm.qqline(ax = ax, line = '45', fmt = 'k--')
+        plt.ylabel('fitted y', fontsize = 14)
+        plt.xlabel('y', fontsize = 14)
         plt.axis('scaled')
         plt.tight_layout()
         plt.title('Real vs Fitted')
-        plt.savefig('Fit_plot_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
+        plt.savefig(f'Fit_plot_{round_number}', dpi = 600, bbox_inches = 'tight')
 
         fontsize = 20
         markersize = 8
@@ -384,78 +363,77 @@ def residual_analysis(X, y, y_hat, plot = True, nlag = None, alpha = 0.01, round
         fig, axs = plt.subplots(2, 2, figsize=(12,9))
         axs[0,0].hist(residual, density = True, facecolor='skyblue', alpha=1, edgecolor='black')
         axs[0,0].axvline(x=0, color='k', linestyle='--',alpha=0.6)
-        axs[0,0].set_ylabel('Frequency',fontsize = fontsize)
-        axs[0,0].set_xlabel('Residual',fontsize = fontsize)
-        axs[0,0].set_title('Residual histogram',fontsize = fontsize)
+        axs[0,0].set_ylabel('Frequency', fontsize = fontsize)
+        axs[0,0].set_xlabel('Residual', fontsize = fontsize)
+        axs[0,0].set_title('Residual histogram', fontsize = fontsize)
         axs[0,0].tick_params(labelsize = fontsize-3)
            
         axs[0,1].plot(sample_number, residual, 'o', color = 'cornflowerblue', markersize = markersize)
         axs[0,1].axhline(y=0, color='k', linestyle='--',alpha=0.6)
-        axs[0,1].set_xlabel('Sample number',fontsize = fontsize)
-        axs[0,1].set_ylabel('Residual',fontsize = fontsize)
-        axs[0,1].set_title('Residual',fontsize = fontsize)
+        axs[0,1].set_xlabel('Sample number', fontsize = fontsize)
+        axs[0,1].set_ylabel('Residual', fontsize = fontsize)
+        axs[0,1].set_title('Residual', fontsize = fontsize)
         axs[0,1].tick_params(labelsize = fontsize-3)
 
         sm.qqplot(residual.squeeze(), stats.t, fit=True,ax=axs[1,0])
         sm.qqline(ax=axs[1,0], line='45', fmt='k--')
-        axs[1,0].set_xlabel('Theoretical quantiles',fontsize = fontsize)
-        axs[1,0].set_ylabel('Sample quantiles',fontsize = fontsize)
-        axs[1,0].set_title('Normal Q-Q plot',fontsize = fontsize)
+        axs[1,0].set_xlabel('Theoretical quantiles', fontsize = fontsize)
+        axs[1,0].set_ylabel('Sample quantiles', fontsize = fontsize)
+        axs[1,0].set_title('Normal Q-Q plot', fontsize = fontsize)
         axs[1,0].tick_params(labelsize = fontsize-3)
         axs[1,0].get_lines()[0].set_markersize(markersize)
         axs[1,0].get_lines()[0].set_markerfacecolor('cornflowerblue')
         
         axs[1,1].plot(y_hat, residual, 'o', color = 'cornflowerblue', markersize = markersize)
-        axs[1,1].axhline(y=0, color='k', linestyle='--',alpha=0.6)
-        axs[1,1].set_xlabel('Fitted response',fontsize = fontsize)
-        axs[1,1].set_ylabel('Residual',fontsize = fontsize)
-        axs[1,1].set_title('Residual versus fitted response',fontsize = fontsize)
+        axs[1,1].axhline(y=0, color='k', linestyle='--', alpha=0.6)
+        axs[1,1].set_xlabel('Fitted response', fontsize = fontsize)
+        axs[1,1].set_ylabel('Residual', fontsize = fontsize)
+        axs[1,1].set_title('Residual versus fitted response', fontsize = fontsize)
         axs[1,1].tick_params(labelsize = fontsize-3)
         plt.tight_layout()
-        plt.savefig('Residual_plot_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
+        plt.savefig(f'Residual_plot_{round_number}.png', dpi = 600, bbox_inches='tight')
 
     # Heteroscedaticity
     # Test whether variance is the same in 2 subsamples
     test_GF = sms.het_goldfeldquandt(residual,X)
     name = ['F statistic', 'p-value']
-    GF_test = dict(zip(name,test_GF[0:2]))
+    GF_test = dict(zip(name, test_GF[0:2]))
     # Breusch-Pagan test for heteroscedasticity
-    test_BP = sms.het_breuschpagan(residual,np.column_stack((np.ones((y_hat.shape[0],1)),y_hat)))
-    BP_test = dict(zip(name,test_BP[2:]))
+    test_BP = sms.het_breuschpagan(residual, np.column_stack((np.ones((y_hat.shape[0],1)), y_hat)))
+    BP_test = dict(zip(name, test_BP[2:]))
     # White test for heteroscedasticity
-    test_white = sms.het_white(residual, np.column_stack((np.ones((y_hat.shape[0],1)),y_hat)))
-    White_test = dict(zip(name,test_white[2:]))
+    test_white = sms.het_white(residual, np.column_stack((np.ones((y_hat.shape[0],1)), y_hat)))
+    White_test = dict(zip(name, test_white[2:]))
     int_heteroscedasticity = not(test_GF[1] > alpha and test_BP[-1] > alpha and test_white[-1] > alpha) # All tests > alpha -> int_heteroscedasticity = False
     # TODO: shouldn't we have some sort of correction (Bonferroni, etc.) because we're doing 3 tests?
 
     # Dynamics
     if plot:
         # Autocorrelation
-        fig = plt.figure(figsize=(5,3))
+        fig = plt.figure(figsize = (5,3))
         ax1 = fig.add_subplot(111)    
         fig = sm.graphics.tsa.plot_acf(residual, lags=nlag, ax=ax1, alpha= alpha)
         for item in ([ax1.title, ax1.xaxis.label, ax1.yaxis.label] + ax1.get_xticklabels() + ax1.get_yticklabels()):
             item.set_fontsize(14)
         ax1.set_xlabel('Lag')
         plt.tight_layout()
-        plt.savefig('ACF_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
+        plt.savefig(f'ACF_{round_number}.png', dpi = 600, bbox_inches='tight')
         # Partial autocorrelation
-        fig = plt.figure(figsize=(5,3))
+        fig = plt.figure(figsize = (5,3))
         ax2 = fig.add_subplot(111)    
         fig = sm.graphics.tsa.plot_pacf(residual, lags=nlag, ax=ax2, alpha= alpha)
         for item in ([ax2.title, ax2.xaxis.label, ax2.yaxis.label] + ax2.get_xticklabels() + ax2.get_yticklabels()):
             item.set_fontsize(14)
         ax2.set_xlabel('Lag')
         plt.tight_layout()
-        plt.savefig('PACF_' + str(round_number)+'.png', dpi = 600,bbox_inches='tight')
+        plt.savefig(f'PACF_{round_number}.png', dpi = 600, bbox_inches='tight')
     # ACF
-    [acf, confint, qstat, acf_pvalues] = sm.tsa.stattools.acf(residual, nlags=nlag,qstat = True, alpha = alpha)
+    [acf, confint, qstat, acf_pvalues] = sm.tsa.stattools.acf(residual, nlags = nlag, qstat = True, alpha = alpha)
     acf_detection = acf_pvalues < (alpha/nlag) # Ljung-Box Q-Statistic
     acf_lag = [i for i,x in enumerate(acf_detection) if x == True] 
     # PACF
     [pacf, confint_pacf] = sm.tsa.stattools.pacf(residual, nlags=nlag, alpha = alpha)
     pacf_lag = [i for i,x in enumerate(pacf) if x<confint_pacf[i][0] or x>confint_pacf[i][1]]
-    
     int_dynamics = bool(acf_lag + pacf_lag)
     return (int_heteroscedasticity, int_dynamics)
 
@@ -497,7 +475,6 @@ def nonlinearity_assess_dynamic(X, y, plot = True, cat = None, alpha = 0.01, dif
         for i in range(m):
             # Linear correlation
             LC[i,l] = np.corrcoef(X[:-l-1,i],y[l+1:].squeeze())[0,1]
-            
             # Quadratic test
             reg = LinearRegression(fit_intercept=False).fit(X[:-l-1,i].reshape(-1, 1), y[l+1:].reshape(-1, 1))
             y_pred = reg.predict(X[:-l-1,i].reshape(-1, 1))
@@ -508,17 +485,16 @@ def nonlinearity_assess_dynamic(X, y, plot = True, cat = None, alpha = 0.01, dif
             F = (mse1- mse2)/(mse2/(N-2))
             p_value = 1 - f.cdf(F, 1, N-2)
             QT[i,l] = 0 if p_value < 10*np.finfo(float).eps else p_value
-                    
             # Maximal correlation by ACE algorithm
             if cat is None or cat[i] == 0:
-                MC[i,l] = ace_R.ace_R(X[:-l-1,i].reshape(-1, 1), y[l+1:])
+                tx, ty = ace(X[:-l-i, i].reshape(-1, 1), y[l+1:])
             else:
-                MC[i,l] = ace_R.ace_R(X[:-l-1,i].reshape(-1, 1), y[l+1:], cat=1)
+                tx, ty = ace(X[:-l-i, i].reshape(-1, 1), y[l+1:], cat = [0]) # cat is a list with the indices of the X columns that are categorical - in this case, X has only one col, so its idx is 0
+            MC[i, l] = np.corrcoef(tx.squeeze(), ty.squeeze())[0, 1]
 
     for l in range(lag):
         # Linear correlation
         LC[m,l] = np.corrcoef(y[:-l-1].squeeze(),y[l+1:].squeeze())[0,1]
-            
         # Quadratic test
         reg = LinearRegression(fit_intercept=False).fit(y[:-l-1].reshape(-1, 1), y[l+1:].reshape(-1, 1))
         y_pred = reg.predict(y[:-l-1].reshape(-1, 1))
@@ -529,29 +505,28 @@ def nonlinearity_assess_dynamic(X, y, plot = True, cat = None, alpha = 0.01, dif
         F = (mse1- mse2)/(mse2/(N-2))
         p_value = 1 - f.cdf(F, 1, N-2)
         QT[m,l] = 0 if p_value < 10*np.finfo(float).eps else p_value
-                    
         # Maximal correlation by ACE algorithm
         if cat is None or cat[i] == 0:
-            MC[m,l] = ace_R.ace_R(y[:-l-1].reshape(-1, 1), y[l+1:])
+            tx, ty = ace(y[:-l-i].reshape(-1, 1), y[l+1:])
         else:
-            MC[m,l] = ace_R.ace_R(y[:-l-1].reshape(-1, 1), y[l+1:], cat=1)
+            tx, ty = ace(y[:-l-i].reshape(-1, 1), y[l+1:], cat = [0]) # cat is a list with the indices of the X columns that are categorical - in this case, X has only one col, so its idx is 0
+        MC[m, l] = np.corrcoef(tx.squeeze(), ty.squeeze())[0, 1]
         
     if plot:
-        print('=== Nonlinearity test results for lagged data ===')
         # Plot for linear correlation
         cmap = sns.diverging_palette(10,250, as_cmap=True)
-        plt.figure(figsize=(X.shape[1]+1,lag))
+        plt.figure(figsize = (X.shape[1]+1, lag))
         sns.set(font_scale=1.6)
         sns.set_style("whitegrid")
-        ax=sns.heatmap(LC.transpose(),linewidths=0.8,vmin=-1,vmax=1,cmap=cmap,annot=True,\
-                       linecolor="white",annot_kws={"size": 14},xticklabels=xticks,square=True,\
-                       yticklabels=ylabel, cbar_kws={'label': 'linear correlation',"orientation": "horizontal",'ticks' : [-1,0,1]}) 
+        ax = sns.heatmap(LC.transpose(), linewidths=0.8, vmin=-1, vmax=1, cmap=cmap, annot=True,\
+                       linecolor="white", annot_kws={"size": 14}, xticklabels=xticks, square=True,\
+                       yticklabels=ylabel, cbar_kws={'label': 'linear correlation', "orientation": "horizontal", 'ticks': [-1,0,1]})
         loc, labels = plt.yticks()
         ax.set_yticklabels(labels, rotation=0)
-        plt.savefig('linear_correlation_' + str(round_number)+ 'lag'+str(lag)+'.png', dpi = 600,bbox_inches='tight')
+        plt.savefig(f'linear_correlation_{round_number}_lag_{lag}.png', dpi = 600, bbox_inches='tight')
         
         # Plot quadratic test
-        plt.figure(figsize=(X.shape[1]+1,lag))
+        plt.figure(figsize = (X.shape[1]+1, lag))
         # Calculate the rejection threhsold (default alpha=0.01 for one test)
         q_test_threshold = alpha/np.shape(QT)[0]/np.shape(QT)[1]
         plot_threshold = int(np.floor(np.log10(q_test_threshold)))
@@ -559,21 +534,21 @@ def nonlinearity_assess_dynamic(X, y, plot = True, cat = None, alpha = 0.01, dif
         # Set lower bar
         low_value_flags = QT < plot_threshold**2
         QT[low_value_flags] = plot_threshold**2
-        ax=sns.heatmap(QT.transpose(),linewidths=0.8,vmin=plot_threshold**2,vmax=1,cmap="Blues",annot=True, norm=LogNorm(),\
-                       linecolor="white",annot_kws={"size": 14},xticklabels=xticks,square=True,yticklabels=ylabel,\
-                       cbar_kws={'label': 'p-value of quadratic test',"orientation": "horizontal",'ticks' : [plot_threshold**2,plot_threshold,1]}) 
+        ax = sns.heatmap(QT.transpose(), linewidths=0.8, vmin=plot_threshold**2, vmax=1, cmap="Blues", annot=True, norm=LogNorm(),\
+                       linecolor="white", annot_kws={"size": 14}, xticklabels=xticks, square=True, yticklabels=ylabel,\
+                       cbar_kws={'label': 'p-value of quadratic test', "orientation": "horizontal", 'ticks': [plot_threshold**2,plot_threshold,1]})
         loc, labels = plt.yticks()
         ax.set_yticklabels(labels, rotation=0)
-        plt.savefig('quadratic_test_' + str(round_number)+ 'lag'+str(lag)+'.png', dpi = 600,bbox_inches='tight')
+        plt.savefig(f'quadratic_test_{round_number}_lag_{lag}.png', dpi = 600, bbox_inches='tight')
 
         # Plot maximal correlation
-        plt.figure(figsize=(X.shape[1]+1,lag))
-        ax=sns.heatmap(MC.transpose(),linewidths=0.8,vmin=0,vmax=1,cmap="Blues",annot=True,\
-                       linecolor="white",annot_kws={"size": 14},xticklabels=xticks,square=True,yticklabels=ylabel,\
-                       cbar_kws={'label': 'maximal correlation',"orientation": "horizontal",'ticks' : [0,0.5,1]}) 
+        plt.figure(figsize = (X.shape[1]+1, lag))
+        ax = sns.heatmap(MC.transpose(), linewidths=0.8, vmin=0, vmax=1, cmap="Blues", annot=True,\
+                       linecolor="white", annot_kws={"size": 14}, xticklabels=xticks, square=True, yticklabels=ylabel,\
+                       cbar_kws={'label': 'maximal correlation', "orientation": "horizontal", 'ticks' :[0,0.5,1]})
         loc, labels = plt.yticks()
         ax.set_yticklabels(labels, rotation=0)
-        plt.savefig('maximal_correlation_' + str(round_number)+ 'lag'+str(lag)+'.png', dpi = 600,bbox_inches='tight')
+        plt.savefig(f'maximal_correlation_{round_number}_lag_{lag}.png', dpi = 600, bbox_inches='tight')
     
     if m > 1:
         # For quadratic test
@@ -594,7 +569,6 @@ def nonlinearity_assess_dynamic(X, y, plot = True, cat = None, alpha = 0.01, dif
                     counter += 1
                     F = (mse1-mse2)/(mse2/(N-2))
                     p_values[counter-1] = 1-f.cdf(F, 1, N-2)
-         
             tri = np.zeros((m-1, m-1))
             count = 0
             for i in range(1,m):
@@ -605,37 +579,28 @@ def nonlinearity_assess_dynamic(X, y, plot = True, cat = None, alpha = 0.01, dif
                 count += i  
             tri[tri<1e-15] = 0
             bi_test_result[l] = sum(p_values < alpha/np.shape(p_values)[0]/(lag+1))
-            
             if plot:
                 mask = np.zeros_like(tri, dtype=np.bool)
                 mask[np.tril_indices_from(mask, k=-1)] = True
-                s=17
                 # Set up the matplotlib figure
                 sns.set_style("white")
                 fig, ax = plt.subplots(figsize=(1.5*(m-1),1.5*(m-1)))
-                sns.set(font_scale=1.3)
-                plt.tick_params(labelsize=s)
+                sns.set(font_scale = 1.3)
+                plt.tick_params(labelsize = 17)
                 plot_threshold = 0.15
-                sns.heatmap(tri, cmap="Blues", mask=mask,square=True,vmin=0,vmax=1,linecolor="white", linewidths=0.8, ax=ax,annot=True,cbar_kws={"shrink": .82, 'ticks' : [0, 0.15, 0.5, 1]})
+                sns.heatmap(tri, cmap="Blues", mask=mask, square=True, vmin=0, vmax=1, linecolor="white", linewidths=0.8, ax=ax, annot=True, cbar_kws={"shrink": .82, 'ticks': [0, 0.15, 0.5, 1]})
                 ax.set_xticklabels(xticks[1:])
                 ax.set_yticklabels(xticks[:-1])
-                plt.title('p_values for bilinear terms lag ' + str(l))
-                plt.savefig('f_bilinear_'+ str(round_number)+ 'lag'+str(l)+'.png', dpi = 600,bbox_inches='tight')
-
+                plt.title(f'p_values for bilinear terms lag {l}')
+                plt.savefig(f'f_bilinear_{round_number}_lag_{l}.png', dpi = 600, bbox_inches='tight')
         bi_test = sum(bi_test_result) > 1
+    else:
+        bi_test = False
 
     # Detemine whether nonlinearity is significant
-    corr_difference = MC - abs(LC) > difference # Default 0.4, for maximal correlation
-    a= MC > 0.92
-    b = MC-abs(LC) > 0.1
-    corr_absolute = a*b
-    corr_difference = corr_absolute + corr_difference
+    corr_difference = np.any(MC - abs(LC) > difference)
+    corr_absolute = np.any((MC > 0.92) & (MC - abs(LC) > 0.1))
+    corr_difference = corr_absolute or corr_difference
     q_test_threshold = alpha/np.shape(QT)[0]/np.shape(QT)[1]
-    q_test = QT<q_test_threshold # For quadratic test
-    overall_result = np.concatenate((corr_difference, q_test), axis=0) # Overall result
-    
-    if m > 1:
-        return int(True in overall_result.flatten() or bi_test) # True = nonlinear correlation
-    else:
-        return int(True in overall_result.flatten())
-
+    q_test = np.any(QT < q_test_threshold) # Quadratic test
+    return int(corr_difference or corr_absolute or q_test or bi_test)
