@@ -3,6 +3,7 @@ Original work by Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com, https
 Modified by Pedro Seber, https://github.com/PedroSeber/SmartProcessAnalytics
 """
 import numpy as np
+from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold, RepeatedKFold, ShuffleSplit, TimeSeriesSplit, GroupKFold, GroupShuffleSplit, train_test_split
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.linear_model import Ridge
@@ -90,7 +91,7 @@ def CVpartition(X, y, Type = 'Re_KFold', K = 5, Nr = 10, random_state = 0, group
     else:
         raise ValueError(f'{Type} is not a valid CV type.')
 
-def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, Nr = 10, eps = 1e-4, alpha_num = 20, group = None, **kwargs):
+def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = None, cv_type = 'Re_KFold', K_fold = 5, Nr = 10, eps = 1e-4, alpha_num = 20, group = None, **kwargs):
     """
     Determines the best hyperparameters using MSE based on information criteria.
     Also returns MSE and yhat data for the chosen model.
@@ -103,6 +104,9 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         Training data predictors and response.
     X_test, y_test : Numpy array with shape N_test x m, N_test x 1
         Testing data predictors and response.
+    X_unscaled, y_unscaled : Numpy array with shape N x m, N x 1
+        The unscaled values of X and y, used during CV to avoid validation set leakage
+        Used when model_name not in {'ALVEN', 'DALVEN'}, as these already use unscaled inputs
     cv_type : str, optional, default = None
         Which cross validation method to use.
     K_fold : int, optional, default = 5
@@ -116,6 +120,7 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
     **kwargs : dict, optional
         Non-default hyperparameters for model fitting.
     """
+
     if 'robust_priority' not in kwargs: # This should not be the case unless the user called this function manually, which is not recommended
         kwargs['robust_priority'] = False
 
@@ -130,21 +135,30 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         if kwargs['robust_priority']:
             Var = np.empty((alpha_num, len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan
 
-        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+            # Rescaling to avoid validation dataset leakage
+            scaler_x_train = StandardScaler(with_mean=True, with_std=True)
+            scaler_x_train.fit(X_train)
+            X_train_scale = scaler_x_train.transform(X_train)
+            X_val_scale = scaler_x_train.transform(X_val)
+            scaler_y_train = StandardScaler(with_mean=True, with_std=True)
+            scaler_y_train.fit(y_train)
+            y_train_scale = scaler_y_train.transform(y_train)
+            y_val_scale = scaler_y_train.transform(y_val)
             for j in range(len(kwargs['l1_ratio'])):
                 if kwargs['l1_ratio'][j] == 0:
                     alpha_max = (np.sqrt(np.sum(np.dot(X.T,y) ** 2, axis=1)).max())/X.shape[0]/0.0001
                     kwargs['alpha'] = np.logspace(np.log10(alpha_max * eps/100), np.log10(alpha_max), alpha_num)[::-1]
                     for i in range(alpha_num):
-                        clf = Ridge(alpha=kwargs['alpha'][i],fit_intercept=False).fit(X_train, y_train)
-                        MSE_result[i, j, counter] = np.sum((clf.predict(X_val)-y_val)**2)/y_val.shape[0]
+                        clf = Ridge(alpha=kwargs['alpha'][i],fit_intercept=False).fit(X_train_scale, y_train_scale)
+                        MSE_result[i, j, counter] = np.sum((clf.predict(X_val_scale)-y_val_scale)**2)/y_val.shape[0]
                         if kwargs['robust_priority']:
                             Var[i, j, counter] = np.sum(clf.coef_.flatten() != 0)
                 else:
                     alpha_max = (np.sqrt(np.sum(np.dot(X.T,y) ** 2, axis=1)).max())/X.shape[0]/kwargs['l1_ratio'][j]
                     kwargs['alpha'] = np.logspace(np.log10(alpha_max * eps), np.log10(alpha_max), alpha_num)[::-1]
                     for i in range(alpha_num):
-                        _, variable, _, mse, _, _ = EN(X_train, y_train, X_val, y_val, kwargs['alpha'][i], kwargs['l1_ratio'][j], use_cross_entropy = kwargs['use_cross_entropy'])
+                        _, variable, _, mse, _, _ = EN(X_train_scale, y_train_scale, X_val_scale, y_val_scale, kwargs['alpha'][i], kwargs['l1_ratio'][j], use_cross_entropy = kwargs['use_cross_entropy'])
                         MSE_result[i, j, counter] = mse
                         if kwargs['robust_priority']:
                             Var[i, j, counter] = np.sum(variable.flatten() != 0)
@@ -176,11 +190,11 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         # Fit the final model
         if l1_ratio == 0:
             EN_model = Ridge(alpha = alpha, fit_intercept = False).fit(X, y)
-            EN_params= EN_model.coef_.reshape(-1,1)
+            EN_params = EN_model.coef_.reshape(-1,1)
             yhat_train = EN_model.predict(X)
             yhat_test = EN_model.predict(X_test)
-            mse_train = np.sum((yhat_train-y)**2)/y.shape[0]
-            mse_test = np.sum((yhat_test-y_test)**2)/y_test.shape[0]
+            mse_train = MSE(yhat_train.flatten(), y.flatten()).numpy()
+            mse_test = MSE(yhat_test.flatten(), y_test.flatten()).numpy()
         else:
             EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test = EN(X, y, X_test, y_test, alpha = alpha, l1_ratio = l1_ratio)
         return(hyperparams, EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
@@ -199,10 +213,19 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         if kwargs['robust_priority']:
             Var = np.empty((len(kwargs['K']), len(kwargs['eta']), K_fold*Nr)) * np.nan
 
-        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+            # Rescaling to avoid validation dataset leakage
+            scaler_x_train = StandardScaler(with_mean=True, with_std=True)
+            scaler_x_train.fit(X_train)
+            X_train_scale = scaler_x_train.transform(X_train)
+            X_val_scale = scaler_x_train.transform(X_val)
+            scaler_y_train = StandardScaler(with_mean=True, with_std=True)
+            scaler_y_train.fit(y_train)
+            y_train_scale = scaler_y_train.transform(y_train)
+            y_val_scale = scaler_y_train.transform(y_val)
             for i in range(len(kwargs['K'])):
                 for j in range(len(kwargs['eta'])):
-                    _, variable, _, mse, _, _ = SPLS(X_train, y_train, X_val, y_val, K = int(kwargs['K'][i]), eta = kwargs['eta'][j])
+                    _, variable, _, mse, _, _ = SPLS(X_train_scale, y_train_scale, X_val_scale, y_val_scale, K = int(kwargs['K'][i]), eta = kwargs['eta'][j])
                     MSE_result[i, j, counter] = mse
                     if kwargs['robust_priority']:
                         Var[i, j, counter] = np.sum(variable.flatten() != 0)
@@ -312,12 +335,21 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
 
         MSE_result = np.zeros((len(kwargs['K']), K_fold*Nr))
 
-        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group=group)):
+        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+            # Rescaling to avoid validation dataset leakage
+            scaler_x_train = StandardScaler(with_mean=True, with_std=True)
+            scaler_x_train.fit(X_train)
+            X_train_scale = scaler_x_train.transform(X_train)
+            X_val_scale = scaler_x_train.transform(X_val)
+            scaler_y_train = StandardScaler(with_mean=True, with_std=True)
+            scaler_y_train.fit(y_train)
+            y_train_scale = scaler_y_train.transform(y_train)
+            y_val_scale = scaler_y_train.transform(y_val)
             for i in range(len(kwargs['K'])):
-                PLS = PLSRegression(scale = False, n_components = int(kwargs['K'][i]), tol = eps).fit(X_train, y_train)
+                PLS = PLSRegression(scale = False, n_components = int(kwargs['K'][i]), tol = eps).fit(X_train_scale, y_train_scale)
                 PLS_para = PLS.coef_.reshape(-1,1)
-                yhat = np.dot(X_val, PLS_para)
-                MSE_result[i, counter] = MSE(y_val.flatten(), yhat.flatten()).numpy()
+                yhat_val = np.dot(X_val_scale, PLS_para)
+                MSE_result[i, counter] = MSE(y_val.flatten(), yhat_val.flatten()).numpy()
 
         MSE_mean = np.nanmean(MSE_result, axis = 1)
         # Min MSE value (first occurrence)
@@ -334,7 +366,7 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         hyperparams['K'] = kwargs['K'][ind]
 
         # Fit the final model
-        PLS_model = PLSRegression(scale = False, n_components = int(hyperparams['K'])).fit(X,y)
+        PLS_model = PLSRegression(scale = False, n_components = int(hyperparams['K'])).fit(X, y)
         PLS_params = PLS_model.coef_.reshape(-1,1)
         yhat_train = np.dot(X, PLS_params)
         yhat_test = np.dot(X_test, PLS_params)
@@ -349,12 +381,21 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
 
         MSE_result = np.empty((len(kwargs['alpha']), K_fold*Nr)) * np.nan
 
-        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+            # Rescaling to avoid validation dataset leakage
+            scaler_x_train = StandardScaler(with_mean=True, with_std=True)
+            scaler_x_train.fit(X_train)
+            X_train_scale = scaler_x_train.transform(X_train)
+            X_val_scale = scaler_x_train.transform(X_val)
+            scaler_y_train = StandardScaler(with_mean=True, with_std=True)
+            scaler_y_train.fit(y_train)
+            y_train_scale = scaler_y_train.transform(y_train)
+            y_val_scale = scaler_y_train.transform(y_val)
             for i in range(len(kwargs['alpha'])):
-                RR = Ridge(alpha = kwargs['alpha'][i], fit_intercept = False).fit(X_train, y_train)
+                RR = Ridge(alpha = kwargs['alpha'][i], fit_intercept = False).fit(X_train_scale, y_train_scale)
                 Para = RR.coef_.reshape(-1,1)
-                yhat = np.dot(X_val, Para)
-                MSE_result[i, counter] = MSE(y_val.flatten(), yhat.flatten()).numpy()
+                yhat_val = np.dot(X_val_scale, Para)
+                MSE_result[i, counter] = MSE(y_val.flatten(), yhat_val.flatten()).numpy()
 
         MSE_mean = np.nanmean(MSE_result, axis = 1)
         # Min MSE value (first occurrence)
@@ -371,7 +412,7 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         hyperparams['alpha'] = kwargs['alpha'][ind]
 
         # Fit the final model
-        RR_model = Ridge(alpha = hyperparams['alpha'], fit_intercept = False).fit(X,y)
+        RR_model = Ridge(alpha = hyperparams['alpha'], fit_intercept = False).fit(X, y)
         RR_params = RR_model.coef_.reshape(-1,1)
         yhat_train = np.dot(X, RR_params)
         yhat_test = np.dot(X_test, RR_params)
@@ -380,7 +421,6 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         return(hyperparams, RR_model, RR_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name == 'ALVEN':
-        # ALVEN = rm.model_getter(model_name)
         if 'l1_ratio' not in kwargs:
             kwargs['l1_ratio'] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99][::-1]
         if 'degree' not in kwargs:
@@ -500,11 +540,20 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
                     for k in range(len(kwargs['min_samples_leaf'])):
                         S[i, j, k] = i/len(kwargs['max_depth']) - k/len(kwargs['min_samples_leaf'])
 
-        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+            # Rescaling to avoid validation dataset leakage
+            scaler_x_train = StandardScaler(with_mean=True, with_std=True)
+            scaler_x_train.fit(X_train)
+            X_train_scale = scaler_x_train.transform(X_train)
+            X_val_scale = scaler_x_train.transform(X_val)
+            scaler_y_train = StandardScaler(with_mean=True, with_std=True)
+            scaler_y_train.fit(y_train)
+            y_train_scale = scaler_y_train.transform(y_train)
+            y_val_scale = scaler_y_train.transform(y_val)
             for i in range(len(kwargs['max_depth'])):
                 for j in range(len(kwargs['n_estimators'])):
                     for k in range(len(kwargs['min_samples_leaf'])):
-                        _, _, mse, _, _ = nro.RF_fitting(X_train, y_train, X_val, y_val, kwargs['n_estimators'][j], kwargs['max_depth'][i], kwargs['min_samples_leaf'][k])
+                        _, _, mse, _, _ = nro.RF_fitting(X_train_scale, y_train_scale, X_val_scale, y_val_scale, kwargs['n_estimators'][j], kwargs['max_depth'][i], kwargs['min_samples_leaf'][k])
                         MSE_result[i, j, k, counter] = mse
 
         MSE_mean = np.nanmean(MSE_result, axis = 3)
@@ -548,11 +597,20 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
                     for k in range(len(kwargs['epsilon'])):
                         S[i, j, k] = i/len(kwargs['C']) - j/len(kwargs['gamma']) - k/len(kwargs['epsilon'])
 
-        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+            # Rescaling to avoid validation dataset leakage
+            scaler_x_train = StandardScaler(with_mean=True, with_std=True)
+            scaler_x_train.fit(X_train)
+            X_train_scale = scaler_x_train.transform(X_train)
+            X_val_scale = scaler_x_train.transform(X_val)
+            scaler_y_train = StandardScaler(with_mean=True, with_std=True)
+            scaler_y_train.fit(y_train)
+            y_train_scale = scaler_y_train.transform(y_train)
+            y_val_scale = scaler_y_train.transform(y_val)
             for i in range(len(kwargs['C'])):
                 for j in range(len(kwargs['gamma'])):
                     for k in range(len(kwargs['epsilon'])):
-                        _, _, mse, _, _ = nro.SVR_fitting(X_train, y_train, X_val, y_val, kwargs['C'][i], kwargs['epsilon'][k], kwargs['gamma'][j])
+                        _, _, mse, _, _ = nro.SVR_fitting(X_train_scale, y_train_scale, X_val_scale, y_val_scale, kwargs['C'][i], kwargs['epsilon'][k], kwargs['gamma'][j])
                         MSE_result[i, j, k, counter] = mse
 
         MSE_mean = np.nanmean(MSE_result, axis = 3)
@@ -575,7 +633,7 @@ def CV_mse(model_name, X, y, X_test, y_test, cv_type = 'Re_KFold', K_fold = 5, N
         hyperparams['epsilon'] = epsilon
 
         # Fit the final model
-        SVR_model, mse_train, mse_test, yhat_train, yhat_test =  nro.SVR_fitting(X, y, X_test, y_test, C, epsilon, gamma)
+        SVR_model, mse_train, mse_test, yhat_train, yhat_test = nro.SVR_fitting(X, y, X_test, y_test, C, epsilon, gamma)
         return(hyperparams, SVR_model, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name == 'DALVEN' or model_name == 'DALVEN_full_nonlinear':
