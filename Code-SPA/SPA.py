@@ -275,7 +275,7 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
     # Preprocessing the data
     X = deepcopy(X_original)
     y = deepcopy(y_original)
-
+    # Scaling the data
     scaler_x = StandardScaler(with_mean=True, with_std=True)
     scaler_x.fit(X)
     X_scale = scaler_x.transform(X)
@@ -287,7 +287,7 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
         X_test = deepcopy(X_test_original)
         y_test = deepcopy(y_test_original)
         X_test_scale = scaler_x.transform(X_test)
-        y_test_scale = scaler_y.transform(y_test) 
+        y_test_scale = scaler_y.transform(y_test)
     else:
         X_test = X
         y_test = y
@@ -421,9 +421,13 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
     fitting_result[selected_model]['yhat_train_nontrans'] = scaler_y.inverse_transform(np.atleast_2d(fitting_result[selected_model]['yhat_train']))
     fitting_result[selected_model]['yhat_train_nontrans_mean'] = np.mean(fitting_result[selected_model]['yhat_train_nontrans'])
     fitting_result[selected_model]['yhat_train_nontrans_stdev'] = np.std(fitting_result[selected_model]['yhat_train_nontrans'])
+    fitting_result[selected_model]['MSE_train_nontrans'] = np.sum( (fitting_result[selected_model]['yhat_train_nontrans'] - y)**2 )/y.shape[0]
+    fitting_result[selected_model]['RMSE_train_nontrans'] = np.sqrt(fitting_result[selected_model]['MSE_train_nontrans'])
     fitting_result[selected_model]['yhat_test_nontrans'] = scaler_y.inverse_transform(np.atleast_2d(fitting_result[selected_model]['yhat_test']))
     fitting_result[selected_model]['yhat_test_nontrans_mean'] = np.mean(fitting_result[selected_model]['yhat_test_nontrans'])
     fitting_result[selected_model]['yhat_test_nontrans_stdev'] = np.std(fitting_result[selected_model]['yhat_test_nontrans'])
+    fitting_result[selected_model]['MSE_test_nontrans'] = np.sum( (fitting_result[selected_model]['yhat_test_nontrans'] - y_test)**2 )/y_test.shape[0]
+    fitting_result[selected_model]['RMSE_test_nontrans'] = np.sqrt(fitting_result[selected_model]['MSE_test_nontrans'])
     if len(y_test.squeeze()) >= 4: # TODO: residuals with small lengths lead to errors when plotting ACF. Need to figure out why
         if 'DALVEN' in selected_model: # The first "lag" entries are removed from yhat, so we need to remove them from X and y
             lag = fitting_result[selected_model]['model_hyper']['lag']
@@ -501,10 +505,10 @@ def run_cv_nondynamic(model_index, X_train, y_train, X_train_scaled, y_train_sca
                     group = group, K_fold = K_fold, Nr = Nr, alpha_num = alpha_num, l1_ratio = l1_ratio, label_name = True,
                     robust_priority = robust_priority, degree = degree, trans_type = trans_type, use_cross_entropy = use_cross_entropy, select_value = select_value)
         elif model_index == 'SVR' or model_index == 'RF':
-            _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, cv_type = cv_method,
+            _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, X_train, y_train, cv_type = cv_method,
                     group = group, K_fold = K_fold, Nr = Nr, alpha_num = alpha_num, robust_priority = robust_priority)
         else:
-            _, _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, cv_type = cv_method,
+            _, _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, X_train, y_train, cv_type = cv_method,
                     group = group, K_fold = K_fold, Nr = Nr, alpha_num = alpha_num, l1_ratio = l1_ratio, robust_priority = robust_priority)
         return mse_val
     else:
@@ -512,17 +516,17 @@ def run_cv_nondynamic(model_index, X_train, y_train, X_train_scaled, y_train_sca
             model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, mse_val, final_list = cv.CV_mse(model_index, X_train, y_train, X_test, y_test,
                     cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr, alpha_num = alpha_num, l1_ratio = l1_ratio, label_name = True,
                     robust_priority = robust_priority, degree = degree, trans_type = trans_type, use_cross_entropy = use_cross_entropy, select_value = select_value)
-            fitting_result = {'model_hyper':model_hyper,'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_val':mse_val,
+            fitting_result = {'model_hyper':model_hyper, 'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_val':mse_val,
                     'mse_test':mse_test, 'yhat_train':yhat_train, 'yhat_test':yhat_test, 'final_list':final_list}
         elif model_index == 'SVR' or model_index == 'RF':
-            model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled, y_test_scaled,
+            model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled, y_test_scaled, X_train, y_train,
                     cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr, alpha_num = alpha_num, robust_priority = robust_priority)
-            fitting_result = {'model_hyper':model_hyper,'final_model':final_model, 'mse_train':mse_train, 'mse_val':mse_val, 'mse_test':mse_test,
+            fitting_result = {'model_hyper':model_hyper, 'final_model':final_model, 'mse_train':mse_train, 'mse_val':mse_val, 'mse_test':mse_test,
                     'yhat_train':yhat_train, 'yhat_test':yhat_test}
         else:
-            model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled, y_test_scaled,
+            model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled, y_test_scaled, X_train, y_train,
                     cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr, alpha_num = alpha_num, l1_ratio = l1_ratio, robust_priority = robust_priority)
-            fitting_result = {'model_hyper':model_hyper,'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_val': mse_val,
+            fitting_result = {'model_hyper':model_hyper, 'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_val': mse_val,
                     'mse_test':mse_test, 'yhat_train':yhat_train, 'yhat_test':yhat_test}
         return fitting_result, mse_val
 
@@ -547,4 +551,3 @@ def run_DALVEN(model_name, X, y, X_test, y_test, cv_method, alpha_num, lag, degr
 
     return {'model_hyper': DALVEN_hyper,'final_model': DALVEN_model, 'model_params': DALVEN_params , 'mse_train': mse_train_DALVEN, mystring: MSE_v_DALVEN,
             'mse_test': mse_test_DALVEN, 'yhat_train': yhat_train_DALVEN, 'yhat_test': yhat_test_DALVEN, 'final_list': final_list}
-
