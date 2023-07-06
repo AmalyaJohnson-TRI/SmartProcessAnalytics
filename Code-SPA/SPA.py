@@ -307,55 +307,66 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
     if any(temp_model in model_name for temp_model in {'ALVEN', 'SVR', 'RF', 'RR', 'PLS', 'EN', 'PLS', 'SPLS'}) and 'OLS' not in model_name: # TODO: how do we compare OLS with the other models if OLS doesn't have validation scores?
         # Static / traditional CV
         if not nested_cv:
-            val_err = np.empty(len(model_name)) * np.nan
+            MSE_val = np.empty(len(model_name)) * np.nan
             temp_fitting_result = {}
-            for index, model_index in enumerate(model_name):
-                if model_index in {'ALVEN', 'SVR', 'RF', 'RR', 'PLS', 'EN', 'PLS', 'SPLS'}: # There may be dynamic models if the user passed model_name manually
-                    print(f'Running model {model_index}', end = '\r')
-                    fitting_result[model_index], val_err[index] = run_cv_nondynamic(model_index, X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale,
+            for index, this_model in enumerate(model_name):
+                if this_model in {'ALVEN', 'SVR', 'RF', 'RR', 'PLS', 'EN', 'PLS', 'SPLS'}: # There may be dynamic models if the user passed model_name manually
+                    print(f'Running model {this_model}', end = '\r')
+                    fitting_result[this_model], MSE_val[index] = run_cv_nondynamic(this_model, X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale,
                             cv_method, group, K_fold, Nr, alpha_num, l1_ratio, robust_priority, degree, trans_type, cat[-1], select_value)
-                    print(f'Completed model {model_index}')
-            local_selected_model = model_name[np.nanargmin(val_err)]
+                    print(f'Completed model {this_model}')
+            local_selected_model = model_name[np.nanargmin(MSE_val)]
 
         # Nested CV
         else: 
             if group_name is None:
                 from sklearn.model_selection import train_test_split
-                val_err = np.empty((len(model_name), num_outer)) * np.nan
+                MSE_val = np.empty((len(model_name), num_outer)) * np.nan
 
                 for index_out in range(num_outer):
                     print(f'Beginning nested CV loop {index_out+1} out of {num_outer}', end = '/r')
                     X_nest, X_nest_val, y_nest, y_nest_val = train_test_split(X, y, test_size=1/K_fold, random_state = index_out)
                     X_nest_scale, X_nest_scale_val, y_nest_scale, y_nest_scale_val = train_test_split(X_scale, y_scale, test_size=1/K_fold, random_state= index_out)
-                    for index, model_index in enumerate(model_name):
-                        if model_index in {'ALVEN', 'SVR', 'RF', 'RR', 'PLS', 'EN', 'PLS', 'SPLS'}: # There may be dynamic models if the user passed model_name manually
-                            val_err[index, index_out] = run_cv_nondynamic(model_index, X_nest, y_nest, X_nest_scale, y_nest_scale, X_nest_val, y_nest_val, X_nest_scale_val,
+                    for index, this_model in enumerate(model_name):
+                        if this_model in {'ALVEN', 'SVR', 'RF', 'RR', 'PLS', 'EN', 'PLS', 'SPLS'}: # There may be dynamic models if the user passed model_name manually
+                            MSE_val[index, index_out] = run_cv_nondynamic(this_model, X_nest, y_nest, X_nest_scale, y_nest_scale, X_nest_val, y_nest_val, X_nest_scale_val,
                                     y_nest_scale_val, cv_method, group, K_fold, Nr, alpha_num, l1_ratio, robust_priority, degree, trans_type, cat[-1], select_value, True)
             else:
                 from sklearn.model_selection import LeaveOneGroupOut
-                val_err = np.empty((len(model_name), len(np.unique(group)))) * np.nan
+                MSE_val = np.empty((len(model_name), len(np.unique(group)))) * np.nan
+                RMSE_val = np.empty((len(model_name), len(np.unique(group)))) * np.nan
                 logo = LeaveOneGroupOut()
 
                 for index_out, (train, val) in enumerate( logo.split(X, y.flatten(), groups = group.flatten()) ):
                     print(f'Beginning nested CV loop {index_out+1}', end = '/r')
-                    for index, model_index in enumerate(model_name):
-                        if model_index in {'ALVEN', 'SVR', 'RF', 'RR', 'PLS', 'EN', 'PLS', 'SPLS'}: # There may be dynamic models if the user passed model_name manually
-                            val_err[index, index_out] = run_cv_nondynamic(model_index, X[train], y[train], X_scale[train], y_scale[train], X[val], y[val], X_scale[val], y_scale[val],
+                    for index, this_model in enumerate(model_name):
+                        if this_model in {'ALVEN', 'SVR', 'RF', 'RR', 'PLS', 'EN', 'PLS', 'SPLS'}: # There may be dynamic models if the user passed model_name manually
+                            MSE_val[index, index_out] = run_cv_nondynamic(this_model, X[train], y[train], X_scale[train], y_scale[train], X[val], y[val], X_scale[val], y_scale[val],
                                     cv_method, group[train], K_fold, Nr, alpha_num, l1_ratio, robust_priority, degree, trans_type, cat[-1], select_value, True)
 
             # Nested CV MSE results
+            time_now = '-'.join([str(elem) for elem in localtime()[:6]]) # YYYY-MM-DD-hh-mm-ss
             import matplotlib.pyplot as plt
             plt.figure()
             pos = [i+1 for i in range(len(model_name))]
             ax = plt.subplot(111)
-            plt.violinplot(np.transpose(val_err))
+            plt.violinplot(np.transpose(MSE_val))
             ax.set_xticks(pos)
             ax.set_xticklabels(model_name)
             ax.set_title('Testing MSE distribution using nested CV')
-            plt.savefig('Violin_plot.png')
+            plt.savefig(f'MSE_violin_plot_{time_now}.png')
+            RMSE_val = np.sqrt(MSE_val)
+            plt.figure()
+            pos = [i+1 for i in range(len(model_name))]
+            ax = plt.subplot(111)
+            plt.violinplot(np.transpose(RMSE_val))
+            ax.set_xticks(pos)
+            ax.set_xticklabels(model_name)
+            ax.set_title('Testing RMSE distribution using nested CV')
+            plt.savefig(f'RMSE_violin_plot_{time_now}.png')
 
             # Final model fitting
-            local_selected_model = model_name[np.nanargmin(np.mean(val_err, axis = 1))]
+            local_selected_model = model_name[np.nanargmin(np.mean(MSE_val, axis = 1))]
             fitting_result[local_selected_model], _ = run_cv_nondynamic(local_selected_model, X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale,
                     cv_method, group, K_fold, Nr, alpha_num, l1_ratio, robust_priority, degree, trans_type, cat[-1], select_value)
 
@@ -439,7 +450,6 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
             print('Note that specifying a non-dynamic model will override the dynamic_model flag')
 
     # Setup for saving
-    time_now = '-'.join([str(elem) for elem in localtime()[:6]]) # YYYY-MM-DD-hh-mm-ss
     # jsons do not work with numpy arrays - converting to list
     fr2 = fitting_result.copy()
     for model in fr2.keys():
