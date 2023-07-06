@@ -184,7 +184,7 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
         y_test_original = None
 
     if cat is None:
-        cat = [0] * (N+1)
+        cat = [0] * (m+1)
     # Ensuring the user didn't pass too many plot labels by mistake
     if isinstance(xticks, (list, tuple)):
         xticks = xticks[:m]
