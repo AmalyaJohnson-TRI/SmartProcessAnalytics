@@ -821,7 +821,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         if 'use_cross_entropy' not in kwargs or not kwargs['use_cross_entropy']:
             loss_function = torch.nn.functional.mse_loss
         else:
-            if 'class_weight' not in kwargs or kwargs['class_weight'] = None:
+            if 'class_weight' not in kwargs or kwargs['class_weight'] is None:
                 kwargs['class_weight'] = np.ones(y.shape[1])
             loss_function = torch.nn.CrossEntropyLoss(weight = kwargs['class_weight']).to(device)
         # Scheduler hyperparameters
