@@ -55,7 +55,7 @@ def OLS_fitting(X, y, X_test, y_test):
 
 def SPLS_fitting(X, y, X_test, y_test, K = None, eta = None, eps = 1e-4, maxstep = 1000):
     """
-    Fits data using an Sparse PLS model coded in R
+    Fits data using an Sparse PLS model (see doi.org/10.1111%2Fj.1467-9868.2009.00723.x)
 
     Parameters
     ----------
@@ -69,7 +69,10 @@ def SPLS_fitting(X, y, X_test, y_test, K = None, eta = None, eps = 1e-4, maxstep
         Sparsity tuning parameter ranging from 0 to 1
     """
     _, selected_variables, _, _ = SPLS(X, y, K, eta, eps = eps, max_steps = maxstep)
-    SPLS_model = PLSRegression(K, scale = False, tol = eps).fit(X[:, selected_variables], y)
+    if len(selected_variables) >= K:
+        SPLS_model = PLSRegression(K, scale = False, tol = eps).fit(X[:, selected_variables], y)
+    else:
+        return None, None, np.inf, np.inf, None, None # TODO: should we really return np.inf?
     SPLS_params = SPLS_model.coef_.squeeze()
     # Predictions and MSEs
     yhat_train = np.dot(X[:, selected_variables], SPLS_params)
