@@ -23,15 +23,17 @@ import warnings
 from sklearn.exceptions import ConvergenceWarning
 warnings.filterwarnings('ignore', category = ConvergenceWarning)
 warnings.filterwarnings('ignore', category = RuntimeWarning)
+from torch import save as torchsave
 import pdb
 
 def main_SPA(main_data, test_data = None, interpretable = False, continuity = False, group_name = None, spectral_data = False,
             plot_interrogation = False, enough_data = False, nested_cv = False, robust_priority = False, dynamic_model = False, lag = [0],
             alpha = 0.01, cat = None, xticks = None, yticks = ['y'], model_name = None, cv_method = None, K_fold = 5, Nr = 10, alpha_num = 20,
             degree = [1, 2, 3], num_outer = 10, K_steps = 1, l1_ratio = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99],
-            trans_type = 'auto', select_value = 0.10, RNN_activation = ['relu'], RNN_layers = None, RNN_cell = ['basic'], RNN_batch_size = 1,
-            RNN_epoch_overlap = None, RNN_past_steps = 10, RNN_max_checks_without_progress = 50, RNN_learning_rate = 1e-3, RNN_lambda_l2_reg = 1e-3,
-            RNN_num_epochs = 200, maxorder = 10, ADAPTx_path = None, ADAPTx_save_path = None, ADAPTx_max_lag = 12, ADAPTx_degrees = [-1, 0, 1]):
+            trans_type = 'auto', select_value = 0.10, activation = ['relu'], MLP_layers = None, RNN_layers = None, batch_size = 32,
+            learning_rate = [1e-2, 5e-3], weight_decay = 0, n_epochs = 100, class_loss = None, scheduler = 'plateau', scheduler_mode = 'min',
+            scheduler_factor = 0.5, scheduler_patience = 10, scheduler_min_LR = None, scheduler_last_epoch = None, scheduler_warmup = 10,
+            val_loss_file = None, maxorder = 10, ADAPTx_path = None, ADAPTx_save_path = None, ADAPTx_max_lag = 12, ADAPTx_degrees = [-1, 0, 1]):
     """
     The main SPA function, which calls all other functions needed for model building.
 
@@ -111,40 +113,58 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
         Must be either 'auto' (all variables) or 'poly' (polynomial powers only).
     select_value : float, optional, default = 0.10
         The (p-value or percent) cutoff for ALVEN / DALVEN to select a variable
-    RNN_activation : list of str, optional, default = ['relu']
-        The activation function(s) used to build an RNN.
-        Each entry must be in {'relu', 'tanh', 'sigmoid', 'linear'}.
-        If multiple values, all are tested against the validation set ...
-            and the best is selected.
-        All 'RNN_' parameters are relevant only when model_name == 'RNN'
+    activation : list of str, optional, default = ['relu']
+        The activation function(s) used to build ANNs.
+        Each entry must be in {'relu', 'tanh', 'sigmoid', 'tanhshrink', 'selu'}.
+        If multiple values, all are cross-validated and the best is selected.
+    MLP_layers: array, optional, default = None
+        An array of arrays in which each entry is a container with the number of neurons in each layer, using the ...
+            torch.nn.Linear() formatting. The length of each inner container is the number of hidden layers. # TODO: change the input to something more user friendly, such as a direct list?
     RNN_layers : array, optional, default = None
         An array in which each entry is a container with the number of neurons in each layer.
-        The length of each container array is the number of hidden layers.
+        The length of each inner container is the number of hidden layers.
         e.g.: [[512, 256]] tests a single RNN with 2 hidden layers, one with 512 ...
             neurons and the other with 256 neurons. [[512, 256], [256, 256]] tests ...
             2 RNNs, each with 2 hidden layers, and so on.
         If None, is automatically set to [[X_train.shape[1]]] = m (a double list).
-    RNN_cell : list of str, optional, default = ['basic']
-        The cell type(s) of the RNN.
-        Each entry must be in {'basic', 'GNN', 'LSTM'}.
-        If multiple values, all are tested against the validation set ...
-            and the best is selected.
-    RNN_batch_size : int, optional, default = 1
-        The batch size used when training the RNN.
-    RNN_epoch_overlap : int or None, optional, default = None
-        The space between two different training batches.
-        If None, there is no overlap, and all batches use different data.
-    RNN_past_steps : int, optional, default = 10
-        The number of past steps the RNN can use.
-    RNN_max_checks_without_progress : int, optional, default = 50
-        How many steps without improvement in the validation score ...
-            can occur before stopping early.
-    RNN_learning_rate : float, optional, default = 1e-3
-        The learning rate used when training the RNN.
-    RNN_lambda_l2_reg : float, optional, default = 1e-3
-        The weight of the L2 regularization penalty.
-    RNN_num_epochs : int, optional, default = 200
-        The number of RNN training epochs.
+    batch_size : int, optional, default = 32
+        The batch size used when training ANNs.
+    learning_rate : array of floats, optional, default = [1e-2, 5e-3]
+        The learning rate used when training ANNs.
+    weight_decay : float, optional, default = 0
+        Weight penalty used with the AdamW optimizer when training ANNs.
+        Equivalent to L2 regularization.
+    n_epochs : int, optional, default = 100
+        The number of ANN training epochs.
+    class_weight : array, optional, default = None
+        The weights of each class used in the cross-entropy loss function.
+        If None, all class weights are set to 1.
+    scheduler : str, optional, default = 'plateau'
+        The learning rate scheduler used when training ANNs.
+        Must be in {'plateau', 'cosine', 'lambda', 'step', 'multistep', 'exponential'}
+    scheduler_mode : str, optional, default = 'min'
+        One of 'min' or 'max'. When 'min', assumes that the loss function should be minimized, and vice-versa.
+        Used when scheduler == 'plateau'
+    scheduler_factor : float or lambda function, optional, default = 0.5
+        For the plateau, (multi)step, and exponential schedulers, a float. The value the LR is multiplied for reduction ...
+            when the validation loss plateaus (plateau) or after scheduler_patience epochs (step).
+            In other words, new_LR = old_LR * scheduler_factor.
+        For the lambda scheduler, a lambda function of the form "lambda epoch: LR adjustment".
+    scheduler_patience : integer or list of integers, optional, default = 10
+        For the plateau and step schedulers, an integer representing how many epochs must pass before another reduction in LR.
+        For the multistep scheduler, a list of integers. LR will be reduced when epoch == each entry of that list.
+    scheduler_min_lr : float, optional, default = None
+        The lowest LR value the scheduler may set.
+        If None, is set to initial_LR / 16
+    scheduler_last_epoch : integer, optional, default = None
+        For the cosine scheduler, the last epoch with a LR reduction.
+        If None, is set to n_epochs - 30
+    scheduler_warmup : integer, optional, default = 10:
+        For the cosine scheduler, the warmup period in epochs.
+        During warmup, the LR starts at 0 and increases linearly to the specified LR.
+    val_loss_file : str, optional, default = None
+        The path to a .csv file containing CV losses generated by SPA when training ANNs.
+            Used to restart a CV procedure. If None, SPA starts from zero.
     maxorder : int, optional, default = 10
         The maximum state space order used.
         Relevant only when dynamic_model == True and the data are linear. 
@@ -185,6 +205,7 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
 
     if cat is None:
         cat = [0] * (m+1)
+    use_cross_entropy = bool(cat[-1])
     # Ensuring the user didn't pass too many plot labels by mistake
     if isinstance(xticks, (list, tuple)):
         xticks = xticks[:m]
@@ -209,11 +230,13 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
                 if not enough_data or interpretable:
                     print(f'As {"your data are limited"*(not enough_data)}{" and "*(not(enough_data) and interpretable)}{"you require an interpretable model"*interpretable}, only ALVEN will be used.')
                 elif continuity:
-                    print('As you have enough data, do not require the model to be interpretable, and require continuity, ALVEN and SVR will be tested')
+                    print('As you have enough data, do not require the model to be interpretable, and require continuity, ALVEN, SVR, and MLP will be tested')
                     model_name.append('SVR')
+                    model_name.append('MLP')
                 else:
-                    print('As you have enough data, do not require the model to be interpretable, and do not require continuity, ALVEN, SVR, and RF will be tested')
+                    print('As you have enough data, do not require the model to be interpretable, and do not require continuity, ALVEN, SVR, MLP, and RF will be tested')
                     model_name.append('SVR')
+                    model_name.append('MLP')
                     model_name.append('RF')
             # Nonlinear, dynamic models
             elif not enough_data or interpretable:
@@ -304,7 +327,7 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
         selected_model = 'OLS'
 
     # Non-dynamic models
-    if any(temp_model in model_name for temp_model in {'ALVEN', 'SVR', 'RF', 'RR', 'PLS', 'EN', 'PLS', 'SPLS'}) and 'OLS' not in model_name: # TODO: how do we compare OLS with the other models if OLS doesn't have validation scores?
+    if any(temp_model in model_name for temp_model in {'ALVEN', 'SVR', 'RF', 'RR', 'PLS', 'EN', 'PLS', 'SPLS', 'MLP'}) and 'OLS' not in model_name: # TODO: how do we compare OLS with the other models if OLS doesn't have validation scores?
         # Static / traditional CV
         if not nested_cv:
             MSE_val = np.empty(len(model_name)) * np.nan
@@ -315,6 +338,14 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
                     fitting_result[this_model], MSE_val[index] = run_cv_nondynamic(this_model, X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale,
                             cv_method, group, K_fold, Nr, alpha_num, l1_ratio, robust_priority, degree, trans_type, cat[-1], select_value)
                     print(f'Completed model {this_model}')
+                elif this_model == 'MLP':
+                    temp = cv.CV_mse(this_model, X_scale, y_scale, X_test_scale, y_test_scale, X, y, cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr,
+                        use_cross_entropy = use_cross_entropy, activation = activation, MLP_layers = MLP_layers, batch_size = batch_size, learning_rate = learning_rate,
+                        weight_decay = weight_decay, n_epochs = n_epochs, val_loss_file = val_loss_file)
+                    MSE_val[index] = temp[1].min().min()
+                    fitting_result[this_model] = {'final_model':temp[0], 'mse_train':temp[2], 'mse_val':MSE_val[index], 'mse_test':temp[3],
+                    'yhat_train':temp[4], 'yhat_test':temp[5], 'best_hyperparameters':temp[6]}
+                    print('Completed model MLP')
             local_selected_model = model_name[np.nanargmin(MSE_val)]
 
         # Nested CV
@@ -451,7 +482,7 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
 
     # Setup for saving
     # jsons do not work with numpy arrays - converting to list
-    fr2 = fitting_result.copy()
+    fr2 = deepcopy(fitting_result)
     for model in fr2.keys():
         del fr2[model]['final_model'] # Models aren't convertible to json
         for top_key, top_value in fr2[model].items():
@@ -461,6 +492,10 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
                         fr2[model][top_key][key] = value.tolist()
             elif isinstance(top_value, np.ndarray):
                 fr2[model][top_key] = top_value.squeeze().tolist()
+    if 'time_now' not in locals(): # Nested validation already creates this variable, so we won't create it again to keep things consistent
+        time_now = '-'.join([str(elem) for elem in localtime()[:6]]) # YYYY-MM-DD-hh-mm-ss
+    if selected_model in {'MLP', 'RNN'}:
+        torchsave(fitting_result[selected_model]['final_model'].state_dict(), f'SPA_{selected_model}-model_{time_now}.pt')
     # Saving as a pickled file
     with open(f'SPA_results_{time_now}.p', 'wb') as f:
         pickle.dump(fitting_result, f)
