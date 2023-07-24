@@ -16,6 +16,13 @@ from itertools import product
 from joblib import Parallel, delayed
 from tensorflow.keras.losses import MeanSquaredError
 MSE = MeanSquaredError()
+import torch
+from torch.utils.data import Dataset, DataLoader
+import pandas as pd
+from itertools import product
+from collections import OrderedDict
+from time import localtime
+import pdb
 
 def CVpartition(X, y, Type = 'Re_KFold', K = 5, Nr = 10, random_state = 0, group = None):
     """
@@ -349,7 +356,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                 PLS = PLSRegression(scale = False, n_components = int(kwargs['K'][i]), tol = eps).fit(X_train_scale, y_train_scale)
                 PLS_para = PLS.coef_.reshape(-1,1)
                 yhat_val = np.dot(X_val_scale, PLS_para)
-                MSE_result[i, counter] = MSE(y_val.flatten(), yhat_val.flatten()).numpy()
+                MSE_result[i, counter] = MSE(y_val_scale.flatten(), yhat_val.flatten()).numpy()
 
         MSE_mean = np.nanmean(MSE_result, axis = 1)
         # Min MSE value (first occurrence)
@@ -395,7 +402,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                 RR = Ridge(alpha = kwargs['alpha'][i], fit_intercept = False).fit(X_train_scale, y_train_scale)
                 Para = RR.coef_.reshape(-1,1)
                 yhat_val = np.dot(X_val_scale, Para)
-                MSE_result[i, counter] = MSE(y_val.flatten(), yhat_val.flatten()).numpy()
+                MSE_result[i, counter] = MSE(y_val_scale.flatten(), yhat_val.flatten()).numpy()
 
         MSE_mean = np.nanmean(MSE_result, axis = 1)
         # Min MSE value (first occurrence)
@@ -533,7 +540,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
 
         MSE_result = np.empty((len(kwargs['max_depth']), len(kwargs['n_estimators']), len(kwargs['min_samples_leaf']), K_fold*Nr))
         if kwargs['robust_priority']:
-            # TODO: is this scoring system correct? It ignores the actual values of the paramters, caring only about their lengths and positions in the array.
+            # TODO: is this scoring system correct? It ignores the actual values of the parameters, caring only about their lengths and positions in the array.
             S = np.zeros((len(kwargs['max_depth']), len(kwargs['n_estimators']), len(kwargs['min_samples_leaf'])))
             for i in range(len(kwargs['max_depth'])):
                 for j in range(len(kwargs['n_estimators'])):
@@ -590,7 +597,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
 
         MSE_result = np.empty((len(kwargs['C']), len(kwargs['gamma']), len(kwargs['epsilon']), K_fold*Nr)) * np.nan
         if kwargs['robust_priority']:
-            # TODO: is this scoring system correct? It ignores the actual values of the paramters, caring only about their lengths and positions in the array.
+            # TODO: is this scoring system correct? It ignores the actual values of the parameters, caring only about their lengths and positions in the array.
             S = np.zeros((len(kwargs['C']), len(kwargs['gamma']), len(kwargs['epsilon'])))
             for i in range(len(kwargs['C'])):
                 for j in range(len(kwargs['gamma'])):
@@ -791,21 +798,254 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         else:
             return(hyperparams, DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind], list_name_final)
 
+    elif model_name == 'MLP':
+        if 'activation' not in kwargs:
+            kwargs['activation'] = ['relu']
+        if 'MLP_layers' not in kwargs or kwargs['MLP_layers'] is None:
+            myshape_X, myshape_y = X.shape[1], y.shape[1]
+            kwargs['MLP_layers'] = [[(myshape_X, myshape_X*2), (myshape_X*2, myshape_y)], [(myshape_X, myshape_X), (myshape_X, myshape_y)], [(myshape_X, myshape_X//2), (myshape_X//2, myshape_y)], # One hidden layer
+                                    [(myshape_X, myshape_X*2), (myshape_X*2, myshape_X*2), (myshape_X*2, myshape_y)], [(myshape_X, myshape_X*2), (myshape_X*2, myshape_X), (myshape_X, myshape_y)], # Two hidden layers
+                                    [(myshape_X, myshape_X), (myshape_X, myshape_X), (myshape_X, myshape_y)], [(myshape_X, myshape_X), (myshape_X, myshape_X//2), (myshape_X//2, myshape_y)] ]
+        if 'batch_size' not in kwargs:
+            kwargs['batch_size'] = 32
+        if 'learning_rate' not in kwargs:
+            kwargs['learning_rate'] = [1e-2, 5e-3]
+        if 'weight_decay' not in kwargs:
+            kwargs['weight_decay'] = 0
+        if 'n_epochs' not in kwargs:
+            kwargs['n_epochs'] = 100
+        # Loss function
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        if 'use_cross_entropy' not in kwargs:
+            kwargs['use_cross_entropy'] = False
+        if 'use_cross_entropy' not in kwargs or not kwargs['use_cross_entropy']:
+            loss_function = torch.nn.functional.mse_loss
+        else:
+            if 'class_weight' not in kwargs or kwargs['class_weight'] = None:
+                kwargs['class_weight'] = np.ones(y.shape[1])
+            loss_function = torch.nn.CrossEntropyLoss(weight = kwargs['class_weight']).to(device)
+        # Scheduler hyperparameters
+        if 'scheduler' not in kwargs: # TODO: add other scheduler hyperparameters
+            kwargs['scheduler'] = 'plateau'
+        if 'scheduler_mode' not in kwargs:
+            kwargs['scheduler_mode'] = 'min'
+        if 'scheduler_factor' not in kwargs:
+            kwargs['scheduler_factor'] = 0.5
+        if 'scheduler_patience' not in kwargs:
+            kwargs['scheduler_patience'] = 10
+        if 'scheduler_last_epoch' not in kwargs:
+            kwargs['scheduler_last_epoch'] = kwargs['n_epochs'] - 30
+        if 'scheduler_warmup' not in kwargs:
+            kwargs['scheduler_warmup'] = 10
+        if 'val_loss_file' not in kwargs or kwargs['val_loss_file'] is None:
+            time_now = '-'.join([str(elem) for elem in localtime()[:6]]) # YYYY-MM-DD-hh-mm-ss
+            kwargs['val_loss_file'] = f'ANN_val-loss_{time_now}.csv'
+
+        def CV_model(X_unscaled, y_unscaled, loss_function, cv_type, K_fold, Nr, group, kwargs):
+            """
+            This function runs a cross-validation procedure for each combination of MLP / RNN hyperparameters.
+            Results are saved in the kwargs['val_loss_file'] .csv file.
+            """
+            # Recording the validation losses
+            try:
+                final_val_loss = pd.read_csv(kwargs['val_loss_file'], index_col = [0, 1])
+            except FileNotFoundError:
+                print('NOTE: no validation loss file was found, so the cross-validation will begin from the first set of hyperparameters.')
+                my_prod = list(product(kwargs['activation'], kwargs['learning_rate']))
+                my_idx = pd.MultiIndex.from_tuples(my_prod)
+                final_val_loss = pd.DataFrame(np.nan, index = my_idx, columns = [str(elem) for elem in kwargs['MLP_layers']])
+
+            # Train and validate
+            hyperparam_list = list(product(kwargs['MLP_layers'], kwargs['learning_rate'], kwargs['activation']))
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            for cur_idx, cur_hp in enumerate(hyperparam_list): # cur_hp is (layers, lr, activation)
+                # We added a new layer configuration to the hyperparameters
+                if not str(cur_hp[0]) in list(final_val_loss.columns):
+                    final_val_loss.insert(layers.index(cur_hp[0]), str(cur_hp[0]), np.nan) # layers.index to ensure consistent order
+                # We added a new activation or learning rate to the hyperparameters
+                elif not (cur_hp[2], cur_hp[1]) in final_val_loss.index.to_list():
+                    final_val_loss.loc[(cur_hp[2], cur_hp[1]), :] = np.nan
+                    final_val_loss = final_val_loss.sort_index(ascending = [True, False]) # Sorting the indices
+
+                # Run CV only if we do not have validation losses for this set of parameters
+                if np.isnan( final_val_loss.at[(cur_hp[2], cur_hp[1]), str(cur_hp[0])] ):
+                    print(f'Beginning hyperparameters {cur_idx+1:3}/{len(hyperparam_list)}', end = '\r')
+                    if 'scheduler_min_lr' not in kwargs:
+                        kwargs['scheduler_min_lr'] = cur_hp[1] / 16
+                    temp_val_loss = 0
+                    for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+                        # Rescaling to avoid validation dataset leakage
+                        scaler_x_train = StandardScaler(with_mean=True, with_std=True)
+                        scaler_x_train.fit(X_train)
+                        X_train_scale = scaler_x_train.transform(X_train)
+                        X_val_scale = scaler_x_train.transform(X_val)
+                        scaler_y_train = StandardScaler(with_mean=True, with_std=True)
+                        scaler_y_train.fit(y_train)
+                        y_train_scale = scaler_y_train.transform(y_train)
+                        y_val_scale = scaler_y_train.transform(y_val)
+                        # Creating the Datasets / DataLoaders
+                        train_dataset_fold = MyDataset(torch.Tensor(X_train_scale), torch.Tensor(y_train_scale))
+                        train_loader_fold = DataLoader(train_dataset_fold, kwargs['batch_size'], shuffle = True)
+                        val_dataset_fold = MyDataset(torch.Tensor(X_val_scale), torch.Tensor(y_val_scale))
+                        val_loader_fold = DataLoader(val_dataset_fold, kwargs['batch_size'], shuffle = True)
+
+                        # Declaring the model and optimizer
+                        model = SequenceMLP(cur_hp[0], cur_hp[2]).to(device)
+                        optimizer = torch.optim.AdamW(model.parameters(), lr = cur_hp[1], weight_decay = kwargs['weight_decay'])
+                        if kwargs['scheduler'].casefold() == 'plateau':
+                            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, kwargs['scheduler_mode'], kwargs['scheduler_factor'], kwargs['scheduler_patience'], min_lr = kwargs['scheduler_min_lr'])
+                        elif kwargs['scheduler'].casefold() == 'cosine':
+                            scheduler = CosineScheduler(kwargs['scheduler_last_epoch'], cur_hp[1], warmup_steps = kwargs['scheduler_warmup'], final_lr = kwargs['scheduler_min_lr'])
+                        elif kwargs['scheduler'].casefold() == 'lambda':
+                            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, kwargs['scheduler_factor'])
+                        elif kwargs['scheduler'].casefold() == 'step':
+                            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, kwargs['scheduler_patience'], kwargs['scheduler_factor'])
+                        elif kwargs['scheduler'].casefold() == 'multistep':
+                            scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, kwargs['scheduler_patience'], kwargs['scheduler_factor'])
+                        elif kwargs['scheduler'].casefold() == 'exponential':
+                            scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, kwargs['scheduler_factor'])
+                        for epoch in range(kwargs['n_epochs']):
+                            train_loss, _ = loop_model(model, optimizer, train_loader_fold, loss_function, epoch, kwargs['batch_size'], y_train.shape[1])
+                            val_loss, _ = loop_model(model, optimizer, val_loader_fold, loss_function, epoch, kwargs['batch_size'], y_train.shape[1], evaluation = True)
+                            if 'scheduler' in locals() and scheduler.__module__ == 'torch.optim.lr_scheduler': # Pytorch built-in scheduler
+                                scheduler.step(val_loss)
+                            elif 'scheduler' in locals():
+                                for param_group in optimizer.param_groups:
+                                    param_group['lr'] = scheduler(epoch)
+                        # Recording the validation loss for this fold
+                        temp_val_loss += val_loss
+                    # Saving the average validation loss after CV
+                    final_val_loss.at[(cur_hp[2], cur_hp[1]), str(cur_hp[0])] = temp_val_loss / (counter+1)
+                    # if not nested_validation: # Nested validation requires a bunch of inputs to the same file - I haven't implemented a good way to save the intermediate data
+                    final_val_loss.to_csv(kwargs['val_loss_file'])
+            return final_val_loss
+        final_val_loss = CV_model(X_unscaled, y_unscaled, loss_function, cv_type, K_fold, Nr, group, kwargs)
+        # Final model training
+        train_dataset = MyDataset(torch.Tensor(X), torch.Tensor(y))
+        train_loader = DataLoader(train_dataset, kwargs['batch_size'], shuffle = True)
+        test_dataset = MyDataset(torch.Tensor(X_test), torch.Tensor(y_test))
+        test_loader = DataLoader(test_dataset, kwargs['batch_size'], shuffle = True)
+        # Finding the best hyperparameters
+        best_idx = np.unravel_index(np.nanargmin(final_val_loss.values), final_val_loss.shape)
+        best_LR = final_val_loss.index[best_idx[0]][1]
+        best_neurons_str = final_val_loss.columns[best_idx[1]]
+        best_act = final_val_loss.index[best_idx[0]][0]
+        # Converting the best number of neurons from str to list
+        best_neurons = []
+        temp_number = []
+        temp_tuple = []
+        for elem in best_neurons_str:
+            if elem in '0123456789':
+                temp_number.append(elem)
+            elif elem in {',', ')'} and temp_number: # Finished a number. 2nd check because there is a comma right after )
+                converted_number = ''.join(temp_number)
+                temp_tuple.append( int(converted_number) )
+                temp_number = []
+            if elem in {')'}: # Also finished a tuple
+                best_neurons.append(tuple(temp_tuple))
+                temp_tuple = []
+        # Re-declaring the model
+        model = SequenceMLP(best_neurons, best_act).to(device)
+        optimizer = torch.optim.AdamW(model.parameters(), lr = best_LR, weight_decay = kwargs['weight_decay'])
+        if kwargs['scheduler'].casefold() in {'plateau', 'cosine'}:
+            scheduler = CosineScheduler(kwargs['n_epochs']-30, base_lr = best_LR, warmup_steps = 10, final_lr = best_LR/2)
+        # Retrain
+        for epoch in range(kwargs['n_epochs']):
+            train_loss, train_pred = loop_model(model, optimizer, train_loader, loss_function, epoch, kwargs['batch_size'], y.shape[1])
+            if 'scheduler' in locals() and scheduler.__module__ == 'torch.optim.lr_scheduler': # Pytorch built-in scheduler
+                scheduler.step(val_loss) # TODO: we do not really have a val_loss here. Need to check how the other built-in Schedulers behave
+            elif 'scheduler' in locals():
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = scheduler(epoch)
+        # Final evaluation
+        test_loss, test_pred = loop_model(model, optimizer, test_loader, loss_function, epoch, kwargs['batch_size'], y.shape[1], evaluation = True)
+        return model, final_val_loss, train_loss, test_loss, np.array(train_pred, dtype = float), np.array(test_pred, dtype = float), (best_neurons_str, best_LR, best_act) # Converting to float to save as JSON in SPA.py
+
+        # Old stuff, changes / updates TODO
+        if 'IC' in cv_type: # Information criterion
+            IC_result = np.zeros( (len(kwargs['activation']), len(kwargs['MLP_layers']), len(kwargs['learning_rate'])) )
+            for i in range(len(kwargs['cell_type'])):
+                for j in range(len(kwargs['activation'])):
+                    for k in range(len(kwargs['RNN_layers'])):
+                        _, _, _, (AIC,AICc,BIC), _, _, _ = RNN.timeseries_RNN_feedback_single_train(X, y, X_val, y_val, None, None, kwargs['val_ratio'], kwargs['cell_type'][i],
+                                    kwargs['activation'][j], kwargs['RNN_layers'][k], kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'],
+                                    kwargs['lambda_l2_reg'], kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test,
+                                    output_prob_test, state_prob_test, kwargs['max_checks_without_progress'], kwargs['epoch_before_val'], kwargs['save_location'], plot = False)
+                        if cv_type == 'AICc':
+                            IC_result[i,j,k] = AICc
+                        elif cv_type == 'BIC':
+                            IC_result[i,j,k] = BIC
+                        else:
+                            IC_result[i,j,k] = AIC
+            # Min IC value (first occurrence)
+            ind = np.unravel_index(np.argmin(IC_result, axis=None), IC_result.shape)
+        else: # Cross-validation
+            MSE_result = np.empty((len(kwargs['cell_type']), len(kwargs['activation']), len(kwargs['RNN_layers']), K_fold*Nr)) * np.nan
+            if kwargs['robust_priority']:
+                S = np.empty((len(kwargs['cell_type']), len(kwargs['activation']), len(kwargs['RNN_layers']), K_fold*Nr)) * np.nan
+
+            for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, cv_type, K_fold, Nr, group = group)):
+                for i in range(len(kwargs['cell_type'])):
+                    for j in range(len(kwargs['activation'])):
+                        for k in range(len(kwargs['RNN_layers'])):
+                            _, _, _, _, _, val_loss, _ = RNN.timeseries_RNN_feedback_single_train(X, y, X_val, y_val, None, None, kwargs['val_ratio'], kwargs['cell_type'][i],
+                                    kwargs['activation'][j], kwargs['RNN_layers'][k], kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'],
+                                    kwargs['lambda_l2_reg'], kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test,
+                                    output_prob_test, state_prob_test, kwargs['max_checks_without_progress'], kwargs['epoch_before_val'], kwargs['save_location'], plot = False)
+                            MSE_result[i, j, k, counter] = val_loss
+                            if kwargs['robust_priority']:
+                                S[i, j, k, counter] = k + i + j # TODO: is this scoring system correct? It ignores the actual values of the parameters, caring only about their positions in the array.
+
+            MSE_mean = np.nanmean(MSE_result, axis = 3)
+            # Min MSE value (first occurrence)
+            ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
+            if kwargs['robust_priority']:
+                MSE_std = np.nanstd(MSE_result, axis = 3)
+                MSE_min = MSE_mean[ind]
+                MSE_bar = MSE_min + MSE_std[ind]
+                S_val = np.nansum(S, axis = 3)
+                ind = np.nonzero( S_val == np.nanmin(S_val[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
+                ind = (ind[0][0], ind[1][0], ind[2][0])
+
+        # Hyperparameter setup
+        cell_type = kwargs['cell_type'][ind[0]]
+        activation = kwargs['activation'][ind[1]]
+        RNN_layers = kwargs['RNN_layers'][ind[2]]
+
+        prediction_train, prediction_val, prediction_test, _, train_loss_final, val_loss_final, test_loss_final = RNN.timeseries_RNN_feedback_single_train(X, y, None, None, X_test, y_test,
+                kwargs['val_ratio'], cell_type, activation, RNN_layers, kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'], kwargs['lambda_l2_reg'],
+                kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test, output_prob_test, state_prob_test, kwargs['max_checks_without_progress'],
+                kwargs['epoch_before_val'], kwargs['save_location'], kwargs['plot'])
+
+        hyperparams = {}
+        hyperparams['cell_type'] = cell_type
+        hyperparams['activation'] = activation
+        hyperparams['RNN_layers'] = RNN_layers
+        hyperparams['training_params'] = {'batch_size': kwargs['batch_size'], 'epoch_overlap': kwargs['epoch_overlap'], 'num_steps': kwargs['num_steps'], 'learning_rate': kwargs['learning_rate'],
+                                        'lambda_l2_reg': kwargs['lambda_l2_reg'], 'num_epochs': kwargs['num_epochs']}
+        hyperparams['drop_out'] = {'input_prob': kwargs['input_prob'], 'output_prob': kwargs['output_prob'], 'state_prob': kwargs['state_prob']}
+        hyperparams['early_stop'] = {'val_ratio': kwargs['val_ratio'], 'max_checks_without_progress': kwargs['max_checks_without_progress'], 'epoch_before_val': kwargs['epoch_before_val']}
+        if 'IC' in cv_type:
+            hyperparams['IC_optimal'] = IC_result[ind]
+        else:
+            hyperparams['MSE_val'] = MSE_mean[ind]
+        return(hyperparams, kwargs['save_location'], prediction_train, prediction_val, prediction_test, train_loss_final, val_loss_final, test_loss_final)
+
     elif model_name == 'RNN':
         import timeseries_regression_RNN as RNN
         input_size_x = X.shape[1]
 
         # Model architecture
         if 'cell_type' not in kwargs:
-            kwargs['cell_type'] = ['basic']
+            kwargs['cell_type'] = ['lstm']
         if 'activation' not in kwargs:
-            kwargs['activation'] = ['tanh']
+            kwargs['activation'] = ['relu']
         if 'RNN_layers' not in kwargs:
             kwargs['RNN_layers'] = [[input_size_x]]
 
         # Training parameters
         if 'batch_size' not in kwargs:
-            kwargs['batch_size'] = 1
+            kwargs['batch_size'] = 32
         if 'epoch_overlap' not in kwargs:
             kwargs['epoch_overlap'] = None
         if 'num_steps' not in kwargs:
@@ -813,9 +1053,9 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         if 'learning_rate' not in kwargs:
             kwargs['learning_rate'] = 1e-3
         if 'lambda_l2_reg' not in kwargs:
-            kwargs['lambda_l2_reg'] = 1e-3
+            kwargs['lambda_l2_reg'] = 0
         if 'num_epochs' not in kwargs:
-            kwargs['num_epochs'] = 200
+            kwargs['num_epochs'] = 100
         # Dropout parameters
         if 'input_prob' not in kwargs:
             kwargs['input_prob'] = 0.95
@@ -875,7 +1115,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                                     output_prob_test, state_prob_test, kwargs['max_checks_without_progress'], kwargs['epoch_before_val'], kwargs['save_location'], plot = False)
                             MSE_result[i, j, k, counter] = val_loss
                             if kwargs['robust_priority']:
-                                S[i, j, k, counter] = k + i + j # TODO: is this scoring system correct? It ignores the actual values of the paramters, caring only about their positions in the array.
+                                S[i, j, k, counter] = k + i + j # TODO: is this scoring system correct? It ignores the actual values of the parameters, caring only about their positions in the array.
 
             MSE_mean = np.nanmean(MSE_result, axis = 3)
             # Min MSE value (first occurrence)
@@ -939,3 +1179,106 @@ def _DALVEN_joblib_fun(X_train, y_train, X_val, y_val, eps, alpha_num, kwargs, c
                                     select_value = kwargs['select_value'], trans_type = kwargs['trans_type'], use_cross_entropy = kwargs['use_cross_entropy'])
     return mse, np.sum(variable.flatten() != 0), ICs
 
+class MyDataset(Dataset):
+    def __init__(self, Xdata, ydata):
+        self.Xdata = Xdata
+        self.ydata = ydata
+
+    def __len__(self):
+        return len(self.Xdata)
+
+    def __getitem__(self, idx):
+        return self.Xdata[idx], self.ydata[idx]
+
+class CosineScheduler: # For MLPs and RNNs. Code obtained from https://d2l.ai/chapter_optimization/lr-scheduler.html
+    def __init__(self, max_update, base_lr = 0.01, final_lr = 0, warmup_steps = 0, warmup_begin_lr = 0):
+        self.base_lr_orig = base_lr
+        self.max_update = max_update
+        self.final_lr = final_lr
+        self.warmup_steps = warmup_steps
+        self.warmup_begin_lr = warmup_begin_lr
+        self.max_steps = self.max_update - self.warmup_steps
+
+    def get_warmup_lr(self, epoch):
+        increase = (self.base_lr_orig - self.warmup_begin_lr) * float(epoch) / float(self.warmup_steps)
+        return self.warmup_begin_lr + increase
+
+    def __call__(self, epoch):
+        if epoch < self.warmup_steps:
+            return self.get_warmup_lr(epoch)
+        if epoch <= self.max_update:
+            self.base_lr = self.final_lr + (
+                self.base_lr_orig - self.final_lr) * (1 + np.cos(
+                np.pi * (epoch - self.warmup_steps) / self.max_steps)) / 2
+        return self.base_lr
+
+# A helper function that is called every epoch of training or validation for MLPs and RNNs
+def loop_model(model, optimizer, loader, loss_function, epoch, batch_size, myshape_Y = 1, lstm_size = None, evaluation = False, categorical = False):
+    if evaluation:
+        model.eval()
+    else:
+        model.train()
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    total_pred_y = torch.empty((len(loader.dataset), myshape_Y))
+    real_y = torch.empty_like(total_pred_y)
+    for idx, data in enumerate(loader):
+        if lstm_size:
+            X, y, lstm = data
+            lstm = lstm.to(device)
+        else:
+            X, y = data
+            lstm = None
+        X = X.to(device)
+        y = y.to(device)
+        pred = model(X, lstm, categorical)
+        total_pred_y[idx*batch_size:(idx*batch_size)+len(pred), :] = pred.cpu().detach()
+        real_y[idx*batch_size:(idx*batch_size)+len(y), :] = y.cpu().detach()
+        loss = loss_function(pred, y)
+        # Backpropagation
+        if not evaluation:
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+    return loss_function(total_pred_y, real_y).item(), total_pred_y
+
+# MLP or LSTM+MLP model
+class SequenceMLP(torch.nn.Module):
+    def __init__(self, layers, activ_fun = 'relu', lstm_size = 0):
+        super(SequenceMLP, self).__init__()
+        # Setup to convert string to activation function
+        if activ_fun == 'relu':
+            torch_activ_fun = torch.nn.ReLU()
+        elif activ_fun == 'tanh':
+            torch_activ_fun = torch.nn.Tanh()
+        elif activ_fun == 'sigmoid':
+            torch_activ_fun = torch.nn.Sigmoid()
+        elif activ_fun == 'tanhshrink':
+            torch_activ_fun = torch.nn.Tanhshrink()
+        elif activ_fun == 'selu':
+            torch_activ_fun = torch.nn.SELU()
+        else:
+            raise ValueError(f'Invalid activ_fun. You passed {activ_fun}')
+
+        # LSTM cell
+        if lstm_size:
+            self.lstm = torch.nn.LSTM(20, lstm_size, num_layers=1, batch_first=True, bidirectional=True)
+        # Transforming layers list into OrderedDict with layers + activation
+        mylist = list()
+        for idx, elem in enumerate(layers):
+            mylist.append((f'Linear{idx}', torch.nn.Linear(layers[idx][0], layers[idx][1]) ))
+            if idx < len(layers)-1:
+                mylist.append((f'{activ_fun}{idx}', torch_activ_fun))
+        # OrderedDict into NN
+        self.model = torch.nn.Sequential(OrderedDict(mylist))
+
+    def forward(self, x, lstm_data = None, categorical = False):
+        if 'lstm' in dir(self):
+            _, (ht, _) = self.lstm(lstm_data) # Passing only the seq data through the LSTM
+            to_MLP = ht[-1]
+            out = self.model(to_MLP)
+        else:
+            out = self.model(x)
+        if categorical:
+            return torch.nn.sigmoid(out)
+        else:
+            return out
