@@ -302,15 +302,22 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
     scaler_x = StandardScaler(with_mean=True, with_std=True)
     scaler_x.fit(X)
     X_scale = scaler_x.transform(X)
-    scaler_y = StandardScaler(with_mean=True, with_std=True)
-    scaler_y.fit(y)
-    y_scale = scaler_y.transform(y)
+    if not use_cross_entropy:
+        scaler_y = StandardScaler(with_mean=True, with_std=True)
+        scaler_y.fit(y)
+        y_scale = scaler_y.transform(y)
+    else:
+        y = y.squeeze()
+        y_scale = np.array(y, dtype = int)
 
     if X_test_original is not None:
         X_test = deepcopy(X_test_original)
         y_test = deepcopy(y_test_original)
         X_test_scale = scaler_x.transform(X_test)
-        y_test_scale = scaler_y.transform(y_test)
+        if not use_cross_entropy:
+            y_test_scale = scaler_y.transform(y_test)
+        else:
+            y_test_scale = np.array(y_test.squeeze(), dtype = int)
     else:
         X_test = X
         y_test = y
@@ -345,7 +352,7 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
                     MSE_val[index] = temp[1].min().min()
                     fitting_result[this_model] = {'final_model':temp[0], 'mse_train':temp[2], 'mse_val':MSE_val[index], 'mse_test':temp[3],
                     'yhat_train':temp[4], 'yhat_test':temp[5], 'best_hyperparameters':temp[6]}
-                    print('Completed model MLP')
+                    print('Completed model MLP' + ' '*15)
             local_selected_model = model_name[np.nanargmin(MSE_val)]
 
         # Nested CV
@@ -460,17 +467,20 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
         raise UnboundLocalError(f'You input {model_name} for model_name, but that is not a valid name.')
 
     # Residual analysis + test for dynamics in the residual
-    fitting_result[selected_model]['yhat_train_nontrans'] = scaler_y.inverse_transform(np.atleast_2d(fitting_result[selected_model]['yhat_train']))
-    fitting_result[selected_model]['yhat_train_nontrans_mean'] = np.mean(fitting_result[selected_model]['yhat_train_nontrans'])
-    fitting_result[selected_model]['yhat_train_nontrans_stdev'] = np.std(fitting_result[selected_model]['yhat_train_nontrans'])
-    fitting_result[selected_model]['MSE_train_nontrans'] = np.sum( (fitting_result[selected_model]['yhat_train_nontrans'] - y)**2 )/y.shape[0]
-    fitting_result[selected_model]['RMSE_train_nontrans'] = np.sqrt(fitting_result[selected_model]['MSE_train_nontrans'])
-    fitting_result[selected_model]['yhat_test_nontrans'] = scaler_y.inverse_transform(np.atleast_2d(fitting_result[selected_model]['yhat_test']))
-    fitting_result[selected_model]['yhat_test_nontrans_mean'] = np.mean(fitting_result[selected_model]['yhat_test_nontrans'])
-    fitting_result[selected_model]['yhat_test_nontrans_stdev'] = np.std(fitting_result[selected_model]['yhat_test_nontrans'])
-    fitting_result[selected_model]['MSE_test_nontrans'] = np.sum( (fitting_result[selected_model]['yhat_test_nontrans'] - y_test)**2 )/y_test.shape[0]
-    fitting_result[selected_model]['RMSE_test_nontrans'] = np.sqrt(fitting_result[selected_model]['MSE_test_nontrans'])
-    if len(y_test.squeeze()) >= 4: # TODO: residuals with small lengths lead to errors when plotting ACF. Need to figure out why
+    if use_cross_entropy:
+        pass # TODO: selected classes? Maybe more
+    if not use_cross_entropy:
+        fitting_result[selected_model]['yhat_train_nontrans'] = scaler_y.inverse_transform(np.atleast_2d(fitting_result[selected_model]['yhat_train']))
+        fitting_result[selected_model]['yhat_train_nontrans_mean'] = np.mean(fitting_result[selected_model]['yhat_train_nontrans'])
+        fitting_result[selected_model]['yhat_train_nontrans_stdev'] = np.std(fitting_result[selected_model]['yhat_train_nontrans'])
+        fitting_result[selected_model]['MSE_train_nontrans'] = np.sum( (fitting_result[selected_model]['yhat_train_nontrans'] - y)**2 )/y.shape[0]
+        fitting_result[selected_model]['RMSE_train_nontrans'] = np.sqrt(fitting_result[selected_model]['MSE_train_nontrans'])
+        fitting_result[selected_model]['yhat_test_nontrans'] = scaler_y.inverse_transform(np.atleast_2d(fitting_result[selected_model]['yhat_test']))
+        fitting_result[selected_model]['yhat_test_nontrans_mean'] = np.mean(fitting_result[selected_model]['yhat_test_nontrans'])
+        fitting_result[selected_model]['yhat_test_nontrans_stdev'] = np.std(fitting_result[selected_model]['yhat_test_nontrans'])
+        fitting_result[selected_model]['MSE_test_nontrans'] = np.sum( (fitting_result[selected_model]['yhat_test_nontrans'] - y_test)**2 )/y_test.shape[0]
+        fitting_result[selected_model]['RMSE_test_nontrans'] = np.sqrt(fitting_result[selected_model]['MSE_test_nontrans'])
+    if len(y_test.squeeze()) >= 4 and not use_cross_entropy: # TODO: residuals with small lengths lead to errors when plotting ACF. Need to figure out why
         if 'DALVEN' in selected_model: # The first "lag" entries are removed from yhat, so we need to remove them from X and y
             lag = fitting_result[selected_model]['model_hyper']['lag']
         else:

@@ -799,10 +799,25 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             return(hyperparams, DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind], list_name_final)
 
     elif model_name == 'MLP':
+        # Loss function
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        if 'use_cross_entropy' not in kwargs:
+            kwargs['use_cross_entropy'] = False
+        if 'use_cross_entropy' not in kwargs or not kwargs['use_cross_entropy']:
+            loss_function = torch.nn.functional.mse_loss
+        else:
+            if 'class_weight' not in kwargs or kwargs['class_weight'] is None:
+                kwargs['class_weight'] = torch.ones(np.max(y) + int(0 in y)) # If 0 also represents a class, then there are max(y) + 1 classes
+            loss_function = torch.nn.CrossEntropyLoss(weight = kwargs['class_weight']).to(device)
+        # Model and training hyperparameters
         if 'activation' not in kwargs:
             kwargs['activation'] = ['relu']
         if 'MLP_layers' not in kwargs or kwargs['MLP_layers'] is None:
-            myshape_X, myshape_y = X.shape[1], y.shape[1]
+            myshape_X = X.shape[1]
+            if kwargs['use_cross_entropy']:
+                myshape_y = np.max(y) + int(0 in y)
+            else:
+                myshape_y = y.shape[1]
             kwargs['MLP_layers'] = [[(myshape_X, myshape_X*2), (myshape_X*2, myshape_y)], [(myshape_X, myshape_X), (myshape_X, myshape_y)], [(myshape_X, myshape_X//2), (myshape_X//2, myshape_y)], # One hidden layer
                                     [(myshape_X, myshape_X*2), (myshape_X*2, myshape_X*2), (myshape_X*2, myshape_y)], [(myshape_X, myshape_X*2), (myshape_X*2, myshape_X), (myshape_X, myshape_y)], # Two hidden layers
                                     [(myshape_X, myshape_X), (myshape_X, myshape_X), (myshape_X, myshape_y)], [(myshape_X, myshape_X), (myshape_X, myshape_X//2), (myshape_X//2, myshape_y)] ]
@@ -814,18 +829,8 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             kwargs['weight_decay'] = 0
         if 'n_epochs' not in kwargs:
             kwargs['n_epochs'] = 100
-        # Loss function
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        if 'use_cross_entropy' not in kwargs:
-            kwargs['use_cross_entropy'] = False
-        if 'use_cross_entropy' not in kwargs or not kwargs['use_cross_entropy']:
-            loss_function = torch.nn.functional.mse_loss
-        else:
-            if 'class_weight' not in kwargs or kwargs['class_weight'] is None:
-                kwargs['class_weight'] = np.ones(y.shape[1])
-            loss_function = torch.nn.CrossEntropyLoss(weight = kwargs['class_weight']).to(device)
         # Scheduler hyperparameters
-        if 'scheduler' not in kwargs: # TODO: add other scheduler hyperparameters
+        if 'scheduler' not in kwargs:
             kwargs['scheduler'] = 'plateau'
         if 'scheduler_mode' not in kwargs:
             kwargs['scheduler_mode'] = 'min'
@@ -877,16 +882,20 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                         # Rescaling to avoid validation dataset leakage
                         scaler_x_train = StandardScaler(with_mean=True, with_std=True)
                         scaler_x_train.fit(X_train)
-                        X_train_scale = scaler_x_train.transform(X_train)
-                        X_val_scale = scaler_x_train.transform(X_val)
-                        scaler_y_train = StandardScaler(with_mean=True, with_std=True)
-                        scaler_y_train.fit(y_train)
-                        y_train_scale = scaler_y_train.transform(y_train)
-                        y_val_scale = scaler_y_train.transform(y_val)
+                        X_train_scale = torch.Tensor(scaler_x_train.transform(X_train))
+                        X_val_scale = torch.Tensor(scaler_x_train.transform(X_val))
+                        if not kwargs['use_cross_entropy']:
+                            scaler_y_train = StandardScaler(with_mean=True, with_std=True)
+                            scaler_y_train.fit(y_train)
+                            y_train_scale = torch.Tensor(scaler_y_train.transform(y_train))
+                            y_val_scale = torch.Tensor(scaler_y_train.transform(y_val))
+                        else:
+                            y_train_scale = torch.LongTensor(y_train)
+                            y_val_scale = torch.LongTensor(y_val)
                         # Creating the Datasets / DataLoaders
-                        train_dataset_fold = MyDataset(torch.Tensor(X_train_scale), torch.Tensor(y_train_scale))
+                        train_dataset_fold = MyDataset(X_train_scale, y_train_scale)
                         train_loader_fold = DataLoader(train_dataset_fold, kwargs['batch_size'], shuffle = True)
-                        val_dataset_fold = MyDataset(torch.Tensor(X_val_scale), torch.Tensor(y_val_scale))
+                        val_dataset_fold = MyDataset(X_val_scale, y_val_scale)
                         val_loader_fold = DataLoader(val_dataset_fold, kwargs['batch_size'], shuffle = True)
 
                         # Declaring the model and optimizer
@@ -905,8 +914,8 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                         elif kwargs['scheduler'].casefold() == 'exponential':
                             scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, kwargs['scheduler_factor'])
                         for epoch in range(kwargs['n_epochs']):
-                            train_loss, _ = loop_model(model, optimizer, train_loader_fold, loss_function, epoch, kwargs['batch_size'], y_train.shape[1])
-                            val_loss, _ = loop_model(model, optimizer, val_loader_fold, loss_function, epoch, kwargs['batch_size'], y_train.shape[1], evaluation = True)
+                            train_loss, _ = loop_model(model, optimizer, train_loader_fold, loss_function, epoch, kwargs['batch_size'])
+                            val_loss, _ = loop_model(model, optimizer, val_loader_fold, loss_function, epoch, kwargs['batch_size'], evaluation = True)
                             if 'scheduler' in locals() and scheduler.__module__ == 'torch.optim.lr_scheduler': # Pytorch built-in scheduler
                                 scheduler.step(val_loss)
                             elif 'scheduler' in locals():
@@ -920,10 +929,17 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                     final_val_loss.to_csv(kwargs['val_loss_file'])
             return final_val_loss
         final_val_loss = CV_model(X_unscaled, y_unscaled, loss_function, cv_type, K_fold, Nr, group, kwargs)
+        # Creating LongTensors if using cross-entropy
+        if not kwargs['use_cross_entropy']:
+            y = torch.Tensor(y)
+            y_test = torch.Tensor(y_test)
+        else:
+            y = torch.LongTensor(y)
+            y_test = torch.LongTensor(y_test)
         # Final model training
-        train_dataset = MyDataset(torch.Tensor(X), torch.Tensor(y))
+        train_dataset = MyDataset(torch.Tensor(X), y)
         train_loader = DataLoader(train_dataset, kwargs['batch_size'], shuffle = True)
-        test_dataset = MyDataset(torch.Tensor(X_test), torch.Tensor(y_test))
+        test_dataset = MyDataset(torch.Tensor(X_test), y_test)
         test_loader = DataLoader(test_dataset, kwargs['batch_size'], shuffle = True)
         # Finding the best hyperparameters
         best_idx = np.unravel_index(np.nanargmin(final_val_loss.values), final_val_loss.shape)
@@ -951,14 +967,14 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             scheduler = CosineScheduler(kwargs['n_epochs']-30, base_lr = best_LR, warmup_steps = 10, final_lr = best_LR/2)
         # Retrain
         for epoch in range(kwargs['n_epochs']):
-            train_loss, train_pred = loop_model(model, optimizer, train_loader, loss_function, epoch, kwargs['batch_size'], y.shape[1])
+            train_loss, train_pred = loop_model(model, optimizer, train_loader, loss_function, epoch, kwargs['batch_size'])
             if 'scheduler' in locals() and scheduler.__module__ == 'torch.optim.lr_scheduler': # Pytorch built-in scheduler
                 scheduler.step(val_loss) # TODO: we do not really have a val_loss here. Need to check how the other built-in Schedulers behave
             elif 'scheduler' in locals():
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = scheduler(epoch)
         # Final evaluation
-        test_loss, test_pred = loop_model(model, optimizer, test_loader, loss_function, epoch, kwargs['batch_size'], y.shape[1], evaluation = True)
+        test_loss, test_pred = loop_model(model, optimizer, test_loader, loss_function, epoch, kwargs['batch_size'], evaluation = True)
         return model, final_val_loss, train_loss, test_loss, np.array(train_pred, dtype = float), np.array(test_pred, dtype = float), (best_neurons_str, best_LR, best_act) # Converting to float to save as JSON in SPA.py
 
         # Old stuff, changes / updates TODO
@@ -1213,14 +1229,13 @@ class CosineScheduler: # For MLPs and RNNs. Code obtained from https://d2l.ai/ch
         return self.base_lr
 
 # A helper function that is called every epoch of training or validation for MLPs and RNNs
-def loop_model(model, optimizer, loader, loss_function, epoch, batch_size, myshape_Y = 1, lstm_size = None, evaluation = False, categorical = False):
+def loop_model(model, optimizer, loader, loss_function, epoch, batch_size, lstm_size = None, evaluation = False, categorical = False):
     if evaluation:
         model.eval()
     else:
         model.train()
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    total_pred_y = torch.empty((len(loader.dataset), myshape_Y))
-    real_y = torch.empty_like(total_pred_y)
+    total_loss = 0
     for idx, data in enumerate(loader):
         if lstm_size:
             X, y, lstm = data
@@ -1231,15 +1246,25 @@ def loop_model(model, optimizer, loader, loss_function, epoch, batch_size, mysha
         X = X.to(device)
         y = y.to(device)
         pred = model(X, lstm, categorical)
+        if 'total_pred_y' not in locals():
+            total_pred_y = torch.empty((len(loader.dataset), pred.shape[1]))
+            if len(y.shape) > 1:
+                real_y = torch.empty((len(loader.dataset), y.shape[1]))
+            else:
+                real_y = torch.empty(len(loader.dataset))
         total_pred_y[idx*batch_size:(idx*batch_size)+len(pred), :] = pred.cpu().detach()
-        real_y[idx*batch_size:(idx*batch_size)+len(y), :] = y.cpu().detach()
+        if len(y.shape) > 1:
+            real_y[idx*batch_size:(idx*batch_size)+len(y), :] = y.cpu().detach()
+        else:
+            real_y[idx*batch_size:(idx*batch_size)+len(y)] = y.cpu().detach()
         loss = loss_function(pred, y)
         # Backpropagation
         if not evaluation:
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-    return loss_function(total_pred_y, real_y).item(), total_pred_y
+        total_loss += y.shape[0]*loss.item()/loader.dataset.ydata.shape[0]
+    return total_loss, total_pred_y
 
 # MLP or LSTM+MLP model
 class SequenceMLP(torch.nn.Module):
