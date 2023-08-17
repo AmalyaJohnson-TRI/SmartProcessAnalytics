@@ -178,7 +178,7 @@ def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference 
         # Bilinear term
         if m > 1:
         # Generate a mask for the upper triangle
-            mask = np.zeros_like(tri, dtype=np.bool)
+            mask = np.zeros_like(tri, dtype = bool)
             mask[np.tril_indices_from(mask, k=-1)] = True
             # Set up the matplotlib figure
             sns.set_style("white")
@@ -580,7 +580,7 @@ def nonlinearity_assess_dynamic(X, y, plot = True, cat = None, alpha = 0.01, dif
             tri[tri<1e-15] = 0
             bi_test_result[l] = sum(p_values < alpha/np.shape(p_values)[0]/(lag+1))
             if plot:
-                mask = np.zeros_like(tri, dtype=np.bool)
+                mask = np.zeros_like(tri, dtype = bool)
                 mask[np.tril_indices_from(mask, k=-1)] = True
                 # Set up the matplotlib figure
                 sns.set_style("white")
