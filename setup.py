@@ -20,7 +20,6 @@ setup(
         'seaborn>=0.11.2',
         'openpyxl>=3.0.9',
         'xlrd>=2.0.1',
-        'tensorflow>=2.8.1',
         'ace-cream>=0.4',
         'torch>=2.0.0'
         ],

@@ -8,12 +8,10 @@ from sklearn.linear_model import ElasticNet, Lasso, Ridge
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import f_regression, VarianceThreshold
+from sklearn.metrics import mean_squared_error as MSE
 import numpy as np
 import numpy.matlib as matlib
 import nonlinear_regression as nr
-from tensorflow.keras.losses import MeanSquaredError, CategoricalCrossentropy
-MSE = MeanSquaredError()
-CCE = CategoricalCrossentropy()
 import warnings
 warnings.filterwarnings("ignore") # TODO: Want to just ignore the PLS constant residual warnings, but this will do for now
 
@@ -45,12 +43,12 @@ def OLS_fitting(X, y, X_test, y_test):
     # Training
     OLS_model = sm.OLS(y, X).fit()
     yhat_train = OLS_model.predict().reshape((-1,1))
-    mse_train = MSE(y, yhat_train).numpy()
+    mse_train = MSE(y, yhat_train)
     OLS_params = OLS_model.params.reshape(-1,1) # Fitted parameters
     
     # Testing
     yhat_test = OLS_model.predict(X_test).reshape((-1,1))
-    mse_test = MSE(y_test, yhat_test).numpy()
+    mse_test = MSE(y_test, yhat_test)
     return(OLS_model, OLS_params, mse_train, mse_test, yhat_train, yhat_test)
 
 def SPLS_fitting(X, y, X_test, y_test, K = None, eta = None, eps = 1e-4, maxstep = 1000):
@@ -77,8 +75,8 @@ def SPLS_fitting(X, y, X_test, y_test, K = None, eta = None, eps = 1e-4, maxstep
     # Predictions and MSEs
     yhat_train = np.dot(X[:, selected_variables], SPLS_params)
     yhat_test = np.dot(X_test[:, selected_variables], SPLS_params)
-    mse_train = MSE(y, yhat_train).numpy()
-    mse_test = MSE(y_test, yhat_test).numpy()
+    mse_train = MSE(y, yhat_train)
+    mse_test = MSE(y_test, yhat_test)
 
     return SPLS_model, SPLS_params, mse_train, mse_test, yhat_train, yhat_test
 
@@ -102,18 +100,12 @@ def EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter = 10000, tol = 1e
     EN_model = ElasticNet(random_state = 0, alpha = alpha, l1_ratio = l1_ratio, fit_intercept = False, max_iter = max_iter, tol = tol)
     EN_model.fit(X, y)
     yhat_train = EN_model.predict(X).reshape((-1,1))
-    if use_cross_entropy:
-        mse_train = CCE(y.flatten(), yhat_train.flatten()).numpy()
-    else:
-        mse_train = MSE(y, yhat_train).numpy()
+    mse_train = MSE(y, yhat_train)
     EN_params = EN_model.coef_.reshape((-1,1)) # Fitted parameters
 
     # Testing
     yhat_test = EN_model.predict(X_test).reshape((-1,1))
-    if use_cross_entropy:
-        mse_test = CCE(y_test.flatten(), yhat_test.flatten()).numpy()
-    else:
-        mse_test = MSE(y_test, yhat_test).numpy()
+    mse_test = MSE(y_test, yhat_test)
     return (EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test)
 
 def RR_fitting(X, y, X_test, y_test, alpha, l1_ratio):
@@ -135,12 +127,12 @@ def RR_fitting(X, y, X_test, y_test, alpha, l1_ratio):
     # Training
     RR_model = Ridge(alpha = alpha, fit_intercept = False).fit(X, y)
     yhat_train = np.dot(X, RR_params).reshape((-1,1))
-    mse_train = MSE(y, yhat_train).numpy()
+    mse_train = MSE(y, yhat_train)
     RR_params = RR_model.coef_.reshape((-1,1)) # Fitted parameters
 
     # Testing
     yhat_test = np.dot(X_test, RR_params).reshape((-1,1))
-    mse_test = MSE(y_test, yhat_test).numpy()
+    mse_test = MSE(y_test, yhat_test)
     return (RR_model, RR_params, mse_train, mse_test, yhat_train, yhat_test)
 
 def LASSO_fitting(X, y, X_test, y_test, alpha, max_iter = 10000, tol = 1e-4):
@@ -161,12 +153,12 @@ def LASSO_fitting(X, y, X_test, y_test, alpha, max_iter = 10000, tol = 1e-4):
     LASSO_model = Lasso(random_state = 0, alpha = alpha, fit_intercept = False, max_iter = max_iter, tol = tol)
     LASSO_model.fit(X, y)
     yhat_train = LASSO_model.predict(X).reshape((-1,1))
-    mse_train = MSE(y, yhat_train).numpy()
+    mse_train = MSE(y, yhat_train)
     LASSO_params = LASSO_model.coef_.reshape((-1,1)) # Fitted parameters
 
     # Testing
     yhat_test = LASSO_model.predict(X_test).reshape((-1,1))
-    mse_test = MSE(y_test, yhat_test).numpy()
+    mse_test = MSE(y_test, yhat_test)
     return (LASSO_model, LASSO_params, mse_train, mse_test, yhat_train, yhat_test)
 
 def ALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, alpha_num = None, cv = False, max_iter = 10000, 
