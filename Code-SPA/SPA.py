@@ -26,10 +26,10 @@ warnings.filterwarnings('ignore', category = RuntimeWarning)
 from torch import save as torchsave
 import pdb
 
-def main_SPA(main_data, test_data = None, interpretable = False, continuity = False, group_name = None, spectral_data = False,
-            plot_interrogation = False, enough_data = False, nested_cv = False, robust_priority = False, dynamic_model = False, lag = [0],
-            alpha = 0.01, cat = None, xticks = None, yticks = ['y'], model_name = None, cv_method = None, K_fold = 5, Nr = 10, alpha_num = 20,
-            degree = [1, 2, 3], num_outer = 10, K_steps = 1, l1_ratio = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99],
+def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None, scale_X = True, scale_y = True, interpretable = False, continuity = False,
+            group_name = None, spectral_data = False, plot_interrogation = False, enough_data = False, nested_cv = False, robust_priority = False,
+            dynamic_model = False, lag = [0], alpha = 0.01, cat = None, xticks = None, yticks = ['y'], model_name = None, cv_method = None, K_fold = 5, Nr = 10,
+            alpha_num = 20, degree = [1, 2, 3], num_outer = 10, K_steps = 1, l1_ratio = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99],
             trans_type = 'auto', select_value = 0.10, activation = ['relu'], MLP_layers = None, RNN_layers = None, batch_size = 32,
             learning_rate = [1e-2, 5e-3], weight_decay = 0, n_epochs = 100, class_loss = None, scheduler = 'plateau', scheduler_mode = 'min',
             scheduler_factor = 0.5, scheduler_patience = 10, scheduler_min_LR = None, scheduler_last_epoch = None, scheduler_warmup = 10,
@@ -42,9 +42,24 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
     main_data : string
         The path to the file containing your training data.
         The data should be N x (m+1), where the last column contains the predicted variable.
+        Alternatively, the data can be N x m, and contain only inputs. The predicted variable is ...
+            passed to SPA through the main_data_y variable.
+    main_data_y : string, optional, default = None
+        The path to the file containing the outputs of the training data.
+        These data should have the same number of rows as main_data.
+        If None, the last column of main_data is treated as the output.
     test_data : string, optional, default = None
         The path to the file containing your test data.
         If None, the main_data is also used as test data (not recommended).
+    test_data_y : string, optional, default = None
+        The path to the file containing the outputs of the test data.
+        These data should have the same number of rows as test_data.
+        If None, the last column of test_data is treated as the output.
+    scale_X : boolean, optional, default = True
+        Whether to scale the X data.
+    scale_y : boolean, optional, default = True
+        Whether to scale the y data.
+        Relevant only when doing regression and not classification.
     interpretable : boolean, optional, default = False
         Whether you require the model to be interpretable.
     continuity : boolean, optional, default = False
@@ -189,29 +204,37 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
 
     # Loading the data
     Data = load_file(main_data)
-    X_original = Data[:,:-1]
-    y_original = Data[:,-1].reshape(-1,1)
-    m = np.shape(X_original)[1]
-    N = np.shape(X_original)[0]
+    if main_data_y: # N x m main_data and separate y data. main_data may be 3D for an RNN model
+        X_original = Data
+        y_original = load_file(main_data_y)
+    elif len(Data.shape) == 2: # Typical case with an N x (m+1) main_data
+        X_original = Data[:,:-1]
+        y_original = Data[:,-1]
+    if len(y_original.shape) == 1: # Ensuring y_original is 2D and in an N_samples x N_features form
+        y_original = y_original[:, np.newaxis]
 
     if test_data:
         Test_data = load_file(test_data)
-        X_test_original = Test_data[:,:-1]
-        y_test_original = Test_data[:,-1].reshape(-1,1)
-        N_test = np.shape(X_test_original)[0]
+        if test_data_y: # N x m test_data and separate y data. test_data may be 3D for an RNN model
+            X_test_original = Test_data
+            y_test_original = load_file(test_data_y)
+        else: # Typical case with an N x (m+1) test_data
+            X_test_original = Test_data[:,:-1]
+            y_test_original = Test_data[:,-1]
+        if len(y_test_original.shape) == 1: # Ensuring y_test_original is 2D and in an N_samples x N_features form
+            y_test_original = y_test_original[:, np.newaxis]
     else:
         X_test_original = None
         y_test_original = None
 
     if cat is None:
-        cat = [0] * (m+1)
-    use_cross_entropy = bool(cat[-1])
+        cat = [0] * (X_original.shape[1] + y_original.shape[1])
+    use_cross_entropy = bool(cat[-1]) # TODO: what to do if there are multiple y features and some are categorical, some are not?
     # Ensuring the user didn't pass too many plot labels by mistake
     if isinstance(xticks, (list, tuple)):
-        xticks = xticks[:m]
+        xticks = xticks[:X_original.shape[1]]
     if isinstance(yticks, (list, tuple)):
-        yticks = yticks[:1] # [:1] returns a one-element list, while [0] returns the object
-
+        yticks = yticks[:y_original.shape[1]]
 
     # Selecting a model
     if model_name is None:
@@ -219,9 +242,7 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
         nonlinear = nonlinearity_assess(X_original, y_original, plot_interrogation, cat = cat, alpha = alpha, difference = 0.4, xticks = xticks, yticks = yticks, round_number = 0)
         multicollinear = collinearity_assess(X_original, y_original, plot_interrogation, xticks =  xticks, yticks = yticks, round_number = 0)
         if not nonlinear and dynamic_model:
-            nonlinear_dynamic = nonlinearity_assess_dynamic(X_original, y_original, plot_interrogation, alpha = alpha, difference = 0.4, xticks = xticks, yticks = yticks, round_number = 0, lag = max(lag))
-            if nonlinear_dynamic:
-                nonlinear = True
+            nonlinear = nonlinearity_assess_dynamic(X_original, y_original, plot_interrogation, alpha = alpha, difference = 0.4, xticks = xticks, yticks = yticks, round_number = 0, lag = max(lag))
 
         if nonlinear:
             # Nonlinear, nondynamic models
@@ -299,10 +320,13 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
     X = deepcopy(X_original)
     y = deepcopy(y_original)
     # Scaling the data
-    scaler_x = StandardScaler(with_mean=True, with_std=True)
-    scaler_x.fit(X)
-    X_scale = scaler_x.transform(X)
-    if not use_cross_entropy:
+    if scale_X and len(X.shape) == 2: # StandardScaler doesn't work with 3D arrays
+        scaler_x = StandardScaler(with_mean=True, with_std=True)
+        scaler_x.fit(X)
+        X_scale = scaler_x.transform(X)
+    else:
+        X_scale = X
+    if scale_y and not use_cross_entropy:
         scaler_y = StandardScaler(with_mean=True, with_std=True)
         scaler_y.fit(y)
         y_scale = scaler_y.transform(y)
@@ -313,8 +337,11 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
     if X_test_original is not None:
         X_test = deepcopy(X_test_original)
         y_test = deepcopy(y_test_original)
-        X_test_scale = scaler_x.transform(X_test)
-        if not use_cross_entropy:
+        if scale_X and len(X.shape) == 2: # StandardScaler doesn't work with 3D arrays
+            X_test_scale = scaler_x.transform(X_test)
+        else:
+            X_test_scale = X_test
+        if scale_y and not use_cross_entropy:
             y_test_scale = scaler_y.transform(y_test)
         else:
             y_test_scale = np.array(y_test.squeeze(), dtype = int)
@@ -326,45 +353,38 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
 
     # Model fitting
     fitting_result = {}
-
     if 'OLS' in model_name:
         from regression_models import OLS_fitting
         final_model, model_params, mse_train, mse_test, yhat_train, yhat_test = OLS_fitting(X_scale, y_scale, X_test_scale, y_test_scale)
         fitting_result['OLS'] = {'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_test':mse_test, 'yhat_train':yhat_train, 'yhat_test':yhat_test}
         selected_model = 'OLS'
-
     # Non-dynamic models
     if any(temp_model in model_name for temp_model in {'ALVEN', 'SVR', 'RF', 'RR', 'PLS', 'EN', 'PLS', 'SPLS', 'MLP'}) and 'OLS' not in model_name: # TODO: how do we compare OLS with the other models if OLS doesn't have validation scores?
         # Static / traditional CV
         if not nested_cv:
-            MSE_val = np.empty(len(model_name)) * np.nan
             temp_fitting_result = {}
             for index, this_model in enumerate(model_name):
                 if this_model in {'ALVEN', 'SVR', 'RF', 'RR', 'PLS', 'EN', 'PLS', 'SPLS'}: # There may be dynamic models if the user passed model_name manually
                     print(f'Running model {this_model}', end = '\r')
-                    fitting_result[this_model], MSE_val[index] = run_cv_nondynamic(this_model, X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale,
+                    fitting_result[this_model], _ = run_cv_nondynamic(this_model, X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale,
                             cv_method, group, K_fold, Nr, alpha_num, l1_ratio, robust_priority, degree, trans_type, cat[-1], select_value)
                     print(f'Completed model {this_model}')
                 elif this_model == 'MLP':
                     temp = cv.CV_mse(this_model, X_scale, y_scale, X_test_scale, y_test_scale, X, y, cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr,
-                        use_cross_entropy = use_cross_entropy, activation = activation, MLP_layers = MLP_layers, batch_size = batch_size, learning_rate = learning_rate,
-                        weight_decay = weight_decay, n_epochs = n_epochs, val_loss_file = val_loss_file)
-                    MSE_val[index] = temp[1].min().min()
-                    fitting_result[this_model] = {'final_model':temp[0], 'mse_train':temp[2], 'mse_val':MSE_val[index], 'mse_test':temp[3],
-                    'yhat_train':temp[4], 'yhat_test':temp[5], 'best_hyperparameters':temp[6]}
+                        scale_X = scale_X, scale_y = scale_y, use_cross_entropy = use_cross_entropy, activation = activation, MLP_layers = MLP_layers,
+                        batch_size = batch_size, learning_rate = learning_rate, weight_decay = weight_decay, n_epochs = n_epochs, val_loss_file = val_loss_file)
+                    fitting_result[this_model] = {'final_model':temp[0], 'mse_train':temp[2], 'mse_val':temp[1].min().min(), 'mse_test':temp[3],
+                    'best_hyperparameters':temp[6], 'yhat_train':temp[4], 'yhat_test':temp[5]}
                     print('Completed model MLP' + ' '*15)
-            local_selected_model = model_name[np.nanargmin(MSE_val)]
 
-        # Nested CV
-        else: 
+        else: # Nested CV
             if group_name is None:
                 from sklearn.model_selection import train_test_split
                 MSE_val = np.empty((len(model_name), num_outer)) * np.nan
-
                 for index_out in range(num_outer):
                     print(f'Beginning nested CV loop {index_out+1} out of {num_outer}', end = '/r')
-                    X_nest, X_nest_val, y_nest, y_nest_val = train_test_split(X, y, test_size=1/K_fold, random_state = index_out)
-                    X_nest_scale, X_nest_scale_val, y_nest_scale, y_nest_scale_val = train_test_split(X_scale, y_scale, test_size=1/K_fold, random_state= index_out)
+                    X_nest, X_nest_val, y_nest, y_nest_val = train_test_split(X, y, test_size = 1/K_fold, random_state = index_out)
+                    X_nest_scale, X_nest_scale_val, y_nest_scale, y_nest_scale_val = train_test_split(X_scale, y_scale, test_size = 1/K_fold, random_state = index_out)
                     for index, this_model in enumerate(model_name):
                         if this_model in {'ALVEN', 'SVR', 'RF', 'RR', 'PLS', 'EN', 'PLS', 'SPLS'}: # There may be dynamic models if the user passed model_name manually
                             MSE_val[index, index_out] = run_cv_nondynamic(this_model, X_nest, y_nest, X_nest_scale, y_nest_scale, X_nest_val, y_nest_val, X_nest_scale_val,
@@ -410,34 +430,26 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
 
     # Dynamic models
     if 'RNN' in model_name:
-        import timeseries_regression_RNN as t_RNN
-        if RNN_layers is None:
-            RNN_layers = [[m]]
-
-        print('Running model RNN', end = '\r')        
-        if robust_priority and cv_method in {'AIC', 'AICc'}:
-            print(f'Note: BIC is recommended for robustness, but you selected {cv_method}.')
-        RNN_hyper, RNN_model, yhat_train_RNN, yhat_val_RNN, yhat_test_RNN, mse_train_RNN, mse_val_RNN, mse_test_RNN = cv.CV_mse('RNN', X_scale,
-                y_scale, X_test_scale, y_test_scale, cv_method, K_fold, Nr, cell_type = RNN_cell, group = group, activation = RNN_activation, RNN_layers = RNN_layers,
-                num_steps = RNN_past_steps, batch_size = RNN_batch_size, epoch_overlap = RNN_epoch_overlap, learning_rate = RNN_learning_rate,
-                lambda_l2_reg = RNN_lambda_l2_reg, num_epochs = RNN_num_epochs, max_checks_without_progress = RNN_max_checks_without_progress, robust_priority = robust_priority)
-
-        fitting_result['RNN'] = {'model_hyper': RNN_hyper, 'final_model': RNN_model, 'mse_train': mse_train_RNN, 'mse_val': mse_val_RNN, 'mse_test': mse_test_RNN,
-                'yhat_train': yhat_train_RNN, 'yhat_val': yhat_val_RNN, 'yhat_test': yhat_test_RNN, 'MSE_val': MSE_val}
-        print('Finished model RNN')
+        print('Running model RNN', end = '\r')
+        temp = cv.CV_mse('RNN', X_scale, y_scale, X_test_scale, y_test_scale, X, y, cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr, scale_X = scale_X,
+                        scale_y = scale_y, use_cross_entropy = use_cross_entropy, activation = activation, MLP_layers = MLP_layers, RNN_layers = RNN_layers,
+                        batch_size = batch_size, learning_rate = learning_rate, weight_decay = weight_decay, n_epochs = n_epochs, val_loss_file = val_loss_file)
+        fitting_result['RNN'] = {'final_model':temp[0], 'mse_train':temp[2], 'mse_val':temp[1].min().min(), 'mse_test':temp[3],
+        'best_hyperparameters':temp[6], 'yhat_train':temp[4], 'yhat_test':temp[5]}
+        print('Completed model RNN' + ' '*15)
 
     if 'DALVEN' in model_name:
         print('Running model DALVEN', end = '\r')        
         fitting_result['DALVEN'] = run_DALVEN('DALVEN', X, y, X_test, y_test, cv_method, alpha_num, lag, degree, K_fold, Nr, robust_priority, l1_ratio, trans_type, cat[-1])
-        print('Finished model DALVEN')
+        print('Completed model DALVEN')
 
     if 'DALVEN_full_nonlinear' in model_name:
         print('Running model DALVEN_full_nonlinear', end = '\r')        
         fitting_result['DALVEN_full_nonlinear'] = run_DALVEN('DALVEN_full_nonlinear', X, y, X_test, y_test, cv_method, alpha_num, lag, degree, K_fold, Nr,
                     robust_priority, l1_ratio, trans_type, cat[-1])
-        print('Finished model DALVEN_full_nonlinear')
+        print('Completed model DALVEN_full_nonlinear')
 
-    if 'SS' in model_name: # SS
+    if 'SS' in model_name:
         import timeseries_regression_matlab as t_matlab
         # MATLAB
         matlab_params, matlab_myresults, matlab_MSE_train, matlab_MSE_val, matlab_MSE_test, matlab_y_predict_train, matlab_y_predict_val, matlab_y_predict_test,\
@@ -456,7 +468,7 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
                     'mse_test': Adaptx_MSE_test, 'yhat_train': Adaptx_y_predict_train, 'yhat_val': Adaptx_y_predict_val, 'yhat_test': Adaptx_y_predict_test}
 
     # Finding the best model
-    for idx, entry in enumerate(fitting_result):
+    for idx, entry in enumerate(fitting_result): # TODO: this will probably not work with OLS, since it doesn't have a mse_val entry (see above)
         if idx == 0 or fitting_result[entry]['mse_val'] < fitting_result[selected_model]['mse_val']:
             selected_model = entry
     # Catching wrong model names
@@ -468,7 +480,13 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
 
     # Residual analysis + test for dynamics in the residual
     if use_cross_entropy:
-        pass # TODO: selected classes? Maybe more
+        for model in fitting_result.keys(): # Renaming "yhat" to "logits" for all models
+            fitting_result[model]['logits_train'] = fitting_result[model].pop('yhat_train')
+            fitting_result[model]['logits_test'] = fitting_result[model].pop('yhat_test')
+        fitting_result[model]['logits_train_normalized'] = (fitting_result[selected_model]['logits_train'].T / fitting_result[selected_model]['logits_train'].sum(axis=1)).T
+        fitting_result[model]['predicted_class_train'] = fitting_result[model]['logits_train_normalized'].argmax(axis = 1)
+        fitting_result[model]['logits_test_normalized'] = (fitting_result[selected_model]['logits_test'].T / fitting_result[selected_model]['logits_test'].sum(axis=1)).T
+        fitting_result[model]['predicted_class_test'] = fitting_result[model]['logits_test_normalized'].argmax(axis = 1)
     if not use_cross_entropy:
         fitting_result[selected_model]['yhat_train_nontrans'] = scaler_y.inverse_transform(np.atleast_2d(fitting_result[selected_model]['yhat_train']))
         fitting_result[selected_model]['yhat_train_nontrans_mean'] = np.mean(fitting_result[selected_model]['yhat_train_nontrans'])
@@ -480,7 +498,7 @@ def main_SPA(main_data, test_data = None, interpretable = False, continuity = Fa
         fitting_result[selected_model]['yhat_test_nontrans_stdev'] = np.std(fitting_result[selected_model]['yhat_test_nontrans'])
         fitting_result[selected_model]['MSE_test_nontrans'] = np.sum( (fitting_result[selected_model]['yhat_test_nontrans'] - y_test)**2 )/y_test.shape[0]
         fitting_result[selected_model]['RMSE_test_nontrans'] = np.sqrt(fitting_result[selected_model]['MSE_test_nontrans'])
-    if len(y_test.squeeze()) >= 4 and not use_cross_entropy: # TODO: residuals with small lengths lead to errors when plotting ACF. Need to figure out why
+    if len(y_test.squeeze()) >= 4 and not use_cross_entropy and selected_model != 'RNN': # TODO: residuals with small lengths lead to errors when plotting ACF. Need to figure out why
         if 'DALVEN' in selected_model: # The first "lag" entries are removed from yhat, so we need to remove them from X and y
             lag = fitting_result[selected_model]['model_hyper']['lag']
         else:
@@ -532,8 +550,10 @@ def load_file(filename):
         my_file = read_csv(filename, header = None, sep = '\t').values
     elif ext in {'.xls', '.xlsx'}:
         my_file = read_excel(filename, header = None).values
+    elif ext == '.npy':
+        my_file = np.load(filename)
     else:
-        raise ValueError(f'Please provide a filename with extension in {{.txt, .csv, .tsv, .xls, .xlsx}}. You passed {filename}')
+        raise ValueError(f'Please provide a filename with extension in {{.txt, .csv, .tsv, .xls, .xlsx, .npy}}. You passed {filename}')
     return my_file
 
 def run_cv_nondynamic(model_index, X_train, y_train, X_train_scaled, y_train_scaled, X_test, y_test, X_test_scaled, y_test_scaled, cv_method,

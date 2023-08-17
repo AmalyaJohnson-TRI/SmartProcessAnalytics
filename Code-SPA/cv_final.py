@@ -9,13 +9,12 @@ from sklearn.cross_decomposition import PLSRegression
 from sklearn.linear_model import Ridge
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.utils._testing import ignore_warnings
+from sklearn.metrics import mean_squared_error as MSE
 import regression_models as rm
 import nonlinear_regression as nr
 import nonlinear_regression_other as nro
 from itertools import product
 from joblib import Parallel, delayed
-from tensorflow.keras.losses import MeanSquaredError
-MSE = MeanSquaredError()
 import torch
 from torch.utils.data import Dataset, DataLoader
 import pandas as pd
@@ -200,8 +199,8 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             EN_params = EN_model.coef_.reshape(-1,1)
             yhat_train = EN_model.predict(X)
             yhat_test = EN_model.predict(X_test)
-            mse_train = MSE(yhat_train.flatten(), y.flatten()).numpy()
-            mse_test = MSE(yhat_test.flatten(), y_test.flatten()).numpy()
+            mse_train = MSE(yhat_train.flatten(), y.flatten())
+            mse_test = MSE(yhat_test.flatten(), y_test.flatten())
         else:
             EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test = EN(X, y, X_test, y_test, alpha = alpha, l1_ratio = l1_ratio)
         return(hyperparams, EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
@@ -356,7 +355,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                 PLS = PLSRegression(scale = False, n_components = int(kwargs['K'][i]), tol = eps).fit(X_train_scale, y_train_scale)
                 PLS_para = PLS.coef_.reshape(-1,1)
                 yhat_val = np.dot(X_val_scale, PLS_para)
-                MSE_result[i, counter] = MSE(y_val_scale.flatten(), yhat_val.flatten()).numpy()
+                MSE_result[i, counter] = MSE(y_val_scale.flatten(), yhat_val.flatten())
 
         MSE_mean = np.nanmean(MSE_result, axis = 1)
         # Min MSE value (first occurrence)
@@ -377,8 +376,8 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         PLS_params = PLS_model.coef_.reshape(-1,1)
         yhat_train = np.dot(X, PLS_params)
         yhat_test = np.dot(X_test, PLS_params)
-        mse_train = MSE(yhat_train.flatten(), y.flatten()).numpy()
-        mse_test = MSE(yhat_test.flatten(), y_test.flatten()).numpy()
+        mse_train = MSE(yhat_train.flatten(), y.flatten())
+        mse_test = MSE(yhat_test.flatten(), y_test.flatten())
         return(hyperparams, PLS_model, PLS_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name == 'RR':
@@ -402,7 +401,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                 RR = Ridge(alpha = kwargs['alpha'][i], fit_intercept = False).fit(X_train_scale, y_train_scale)
                 Para = RR.coef_.reshape(-1,1)
                 yhat_val = np.dot(X_val_scale, Para)
-                MSE_result[i, counter] = MSE(y_val_scale.flatten(), yhat_val.flatten()).numpy()
+                MSE_result[i, counter] = MSE(y_val_scale.flatten(), yhat_val.flatten())
 
         MSE_mean = np.nanmean(MSE_result, axis = 1)
         # Min MSE value (first occurrence)
@@ -423,8 +422,8 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         RR_params = RR_model.coef_.reshape(-1,1)
         yhat_train = np.dot(X, RR_params)
         yhat_test = np.dot(X_test, RR_params)
-        mse_train = MSE(yhat_train.flatten(), y.flatten()).numpy()
-        mse_test = MSE(yhat_test.flatten(), y_test.flatten()).numpy()
+        mse_train = MSE(yhat_train.flatten(), y.flatten())
+        mse_test = MSE(yhat_test.flatten(), y_test.flatten())
         return(hyperparams, RR_model, RR_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name == 'ALVEN':
@@ -798,9 +797,9 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         else:
             return(hyperparams, DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind], list_name_final)
 
-    elif model_name == 'MLP':
+    elif model_name in {'MLP', 'RNN'}:
         # Loss function
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        kwargs['device'] = 'cuda' if torch.cuda.is_available() else 'cpu'
         if 'use_cross_entropy' not in kwargs:
             kwargs['use_cross_entropy'] = False
         if 'use_cross_entropy' not in kwargs or not kwargs['use_cross_entropy']:
@@ -808,10 +807,8 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         else:
             if 'class_weight' not in kwargs or kwargs['class_weight'] is None:
                 kwargs['class_weight'] = torch.ones(np.max(y) + int(0 in y)) # If 0 also represents a class, then there are max(y) + 1 classes
-            loss_function = torch.nn.CrossEntropyLoss(weight = kwargs['class_weight']).to(device)
-        # Model and training hyperparameters
-        if 'activation' not in kwargs:
-            kwargs['activation'] = ['relu']
+            loss_function = torch.nn.CrossEntropyLoss(weight = kwargs['class_weight']).to(kwargs['device'])
+        # Layer hyperparameters
         if 'MLP_layers' not in kwargs or kwargs['MLP_layers'] is None:
             myshape_X = X.shape[1]
             if kwargs['use_cross_entropy']:
@@ -821,6 +818,18 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             kwargs['MLP_layers'] = [[(myshape_X, myshape_X*2), (myshape_X*2, myshape_y)], [(myshape_X, myshape_X), (myshape_X, myshape_y)], [(myshape_X, myshape_X//2), (myshape_X//2, myshape_y)], # One hidden layer
                                     [(myshape_X, myshape_X*2), (myshape_X*2, myshape_X*2), (myshape_X*2, myshape_y)], [(myshape_X, myshape_X*2), (myshape_X*2, myshape_X), (myshape_X, myshape_y)], # Two hidden layers
                                     [(myshape_X, myshape_X), (myshape_X, myshape_X), (myshape_X, myshape_y)], [(myshape_X, myshape_X), (myshape_X, myshape_X//2), (myshape_X//2, myshape_y)] ]
+        if model_name == 'RNN':
+            if 'RNN_layers' not in kwargs or kwargs['RNN_layers'] is None:
+                kwargs['RNN_layers'] = X.shape[1]
+            # Ensuring the MLP layers are compatible with the RNNs by making the MLP layers' first size equal to the output size of the last RNN
+            last_lstm_size = kwargs['RNN_layers'] if isinstance(kwargs['RNN_layers'], int) else kwargs['RNN_layers'][-1] # For convenience, since kwargs['RNN_layers'] could be a single int or a list
+            for cur_layer in kwargs['MLP_layers']:
+                cur_layer[0] = (last_lstm_size, cur_layer[0][1])
+        elif model_name == 'MLP':
+            kwargs['RNN_layers'] = 0
+        # Other model and training hyperparameters
+        if 'activation' not in kwargs:
+            kwargs['activation'] = ['relu']
         if 'batch_size' not in kwargs:
             kwargs['batch_size'] = 32
         if 'learning_rate' not in kwargs:
@@ -862,7 +871,6 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
 
             # Train and validate
             hyperparam_list = list(product(kwargs['MLP_layers'], kwargs['learning_rate'], kwargs['activation']))
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
             for cur_idx, cur_hp in enumerate(hyperparam_list): # cur_hp is (layers, lr, activation)
                 # We added a new layer configuration to the hyperparameters
                 if not str(cur_hp[0]) in list(final_val_loss.columns):
@@ -880,18 +888,25 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                     temp_val_loss = 0
                     for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
                         # Rescaling to avoid validation dataset leakage
-                        scaler_x_train = StandardScaler(with_mean=True, with_std=True)
-                        scaler_x_train.fit(X_train)
-                        X_train_scale = torch.Tensor(scaler_x_train.transform(X_train))
-                        X_val_scale = torch.Tensor(scaler_x_train.transform(X_val))
-                        if not kwargs['use_cross_entropy']:
+                        if kwargs['scale_X'] and len(X.shape) == 2: # StandardScaler doesn't work with 3D arrays
+                            scaler_x_train = StandardScaler(with_mean=True, with_std=True)
+                            scaler_x_train.fit(X_train)
+                            X_train_scale = torch.Tensor(scaler_x_train.transform(X_train))
+                            X_val_scale = torch.Tensor(scaler_x_train.transform(X_val))
+                        else:
+                            X_train_scale = torch.Tensor(X_train)
+                            X_val_scale = torch.Tensor(X_val)
+                        if kwargs['scale_y'] and not kwargs['use_cross_entropy']:
                             scaler_y_train = StandardScaler(with_mean=True, with_std=True)
                             scaler_y_train.fit(y_train)
                             y_train_scale = torch.Tensor(scaler_y_train.transform(y_train))
                             y_val_scale = torch.Tensor(scaler_y_train.transform(y_val))
-                        else:
+                        elif kwargs['use_cross_entropy']:
                             y_train_scale = torch.LongTensor(y_train)
                             y_val_scale = torch.LongTensor(y_val)
+                        else:
+                            y_train_scale = torch.Tensor(y_train)
+                            y_val_scale = torch.Tensor(y_val)
                         # Creating the Datasets / DataLoaders
                         train_dataset_fold = MyDataset(X_train_scale, y_train_scale)
                         train_loader_fold = DataLoader(train_dataset_fold, kwargs['batch_size'], shuffle = True)
@@ -899,7 +914,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                         val_loader_fold = DataLoader(val_dataset_fold, kwargs['batch_size'], shuffle = True)
 
                         # Declaring the model and optimizer
-                        model = SequenceMLP(cur_hp[0], cur_hp[2]).to(device)
+                        model = SequenceMLP(cur_hp[0], cur_hp[2], X_train_scale.shape[-1], kwargs['RNN_layers'], kwargs['device']).to(kwargs['device'])
                         optimizer = torch.optim.AdamW(model.parameters(), lr = cur_hp[1], weight_decay = kwargs['weight_decay'])
                         if kwargs['scheduler'].casefold() == 'plateau':
                             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, kwargs['scheduler_mode'], kwargs['scheduler_factor'], kwargs['scheduler_patience'], min_lr = kwargs['scheduler_min_lr'])
@@ -914,8 +929,8 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                         elif kwargs['scheduler'].casefold() == 'exponential':
                             scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, kwargs['scheduler_factor'])
                         for epoch in range(kwargs['n_epochs']):
-                            train_loss, _ = loop_model(model, optimizer, train_loader_fold, loss_function, epoch, kwargs['batch_size'])
-                            val_loss, _ = loop_model(model, optimizer, val_loader_fold, loss_function, epoch, kwargs['batch_size'], evaluation = True)
+                            train_loss, _ = loop_model(model, optimizer, train_loader_fold, loss_function, epoch, kwargs['batch_size'], categorical = kwargs['use_cross_entropy'])
+                            val_loss, _ = loop_model(model, optimizer, val_loader_fold, loss_function, epoch, kwargs['batch_size'], evaluation = True, categorical = kwargs['use_cross_entropy'])
                             if 'scheduler' in locals() and scheduler.__module__ == 'torch.optim.lr_scheduler': # Pytorch built-in scheduler
                                 scheduler.step(val_loss)
                             elif 'scheduler' in locals():
@@ -961,20 +976,20 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                 best_neurons.append(tuple(temp_tuple))
                 temp_tuple = []
         # Re-declaring the model
-        model = SequenceMLP(best_neurons, best_act).to(device)
+        model = SequenceMLP(best_neurons, best_act, X.shape[-1], kwargs['RNN_layers'], kwargs['device']).to(kwargs['device'])
         optimizer = torch.optim.AdamW(model.parameters(), lr = best_LR, weight_decay = kwargs['weight_decay'])
         if kwargs['scheduler'].casefold() in {'plateau', 'cosine'}:
             scheduler = CosineScheduler(kwargs['n_epochs']-30, base_lr = best_LR, warmup_steps = 10, final_lr = best_LR/2)
         # Retrain
         for epoch in range(kwargs['n_epochs']):
-            train_loss, train_pred = loop_model(model, optimizer, train_loader, loss_function, epoch, kwargs['batch_size'])
+            train_loss, train_pred = loop_model(model, optimizer, train_loader, loss_function, epoch, kwargs['batch_size'], categorical = kwargs['use_cross_entropy'])
             if 'scheduler' in locals() and scheduler.__module__ == 'torch.optim.lr_scheduler': # Pytorch built-in scheduler
                 scheduler.step(val_loss) # TODO: we do not really have a val_loss here. Need to check how the other built-in Schedulers behave
             elif 'scheduler' in locals():
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = scheduler(epoch)
         # Final evaluation
-        test_loss, test_pred = loop_model(model, optimizer, test_loader, loss_function, epoch, kwargs['batch_size'], evaluation = True)
+        test_loss, test_pred = loop_model(model, optimizer, test_loader, loss_function, epoch, kwargs['batch_size'], evaluation = True, categorical = kwargs['use_cross_entropy'])
         return model, final_val_loss, train_loss, test_loss, np.array(train_pred, dtype = float), np.array(test_pred, dtype = float), (best_neurons_str, best_LR, best_act) # Converting to float to save as JSON in SPA.py
 
         # Old stuff, changes / updates TODO
@@ -1229,7 +1244,7 @@ class CosineScheduler: # For MLPs and RNNs. Code obtained from https://d2l.ai/ch
         return self.base_lr
 
 # A helper function that is called every epoch of training or validation for MLPs and RNNs
-def loop_model(model, optimizer, loader, loss_function, epoch, batch_size, lstm_size = None, evaluation = False, categorical = False):
+def loop_model(model, optimizer, loader, loss_function, epoch, batch_size, evaluation = False, categorical = False):
     if evaluation:
         model.eval()
     else:
@@ -1237,15 +1252,10 @@ def loop_model(model, optimizer, loader, loss_function, epoch, batch_size, lstm_
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     total_loss = 0
     for idx, data in enumerate(loader):
-        if lstm_size:
-            X, y, lstm = data
-            lstm = lstm.to(device)
-        else:
-            X, y = data
-            lstm = None
+        X, y = data
         X = X.to(device)
         y = y.to(device)
-        pred = model(X, lstm, categorical)
+        pred = model(X, categorical)
         if 'total_pred_y' not in locals():
             total_pred_y = torch.empty((len(loader.dataset), pred.shape[1]))
             if len(y.shape) > 1:
@@ -1268,7 +1278,7 @@ def loop_model(model, optimizer, loader, loss_function, epoch, batch_size, lstm_
 
 # MLP or LSTM+MLP model
 class SequenceMLP(torch.nn.Module):
-    def __init__(self, layers, activ_fun = 'relu', lstm_size = 0):
+    def __init__(self, layers, activ_fun = 'relu', lstm_input_size = 0, lstm_hidden_size = 0, device = 'cuda'):
         super(SequenceMLP, self).__init__()
         # Setup to convert string to activation function
         if activ_fun == 'relu':
@@ -1285,8 +1295,15 @@ class SequenceMLP(torch.nn.Module):
             raise ValueError(f'Invalid activ_fun. You passed {activ_fun}')
 
         # LSTM cell
-        if lstm_size:
-            self.lstm = torch.nn.LSTM(20, lstm_size, num_layers=1, batch_first=True, bidirectional=True)
+        if isinstance(lstm_hidden_size, int) and lstm_hidden_size:
+            self.lstm = [torch.nn.LSTM(lstm_input_size, lstm_hidden_size, num_layers=1, batch_first=True, bidirectional=True).to(device)] # Need to send to device because the cells are in a list
+        elif isinstance(lstm_hidden_size, (list, tuple)):
+            self.lstm = []
+            for idx, size in enumerate(lstm_hidden_size):
+                if idx == 0:
+                    self.lstm.append(torch.nn.LSTM(lstm_input_size, size, num_layers=1, batch_first=True, bidirectional=True).to(device)) # Need to send to device because the cells are in a list
+                else:
+                    self.lstm.append(torch.nn.LSTM(lstm_hidden_size[idx-1], size, num_layers=1, batch_first=True, bidirectional=True).to(device)) # Need to send to device because the cells are in a list
         # Transforming layers list into OrderedDict with layers + activation
         mylist = list()
         for idx, elem in enumerate(layers):
@@ -1295,15 +1312,19 @@ class SequenceMLP(torch.nn.Module):
                 mylist.append((f'{activ_fun}{idx}', torch_activ_fun))
         # OrderedDict into NN
         self.model = torch.nn.Sequential(OrderedDict(mylist))
+        self.sigmoid = torch.nn.Sigmoid()
 
-    def forward(self, x, lstm_data = None, categorical = False):
+    def forward(self, x, categorical = False):
         if 'lstm' in dir(self):
-            _, (ht, _) = self.lstm(lstm_data) # Passing only the seq data through the LSTM
-            to_MLP = ht[-1]
+            for cell_idx, cell in enumerate(self.lstm):
+                x, (ht, _) = cell(x)
+                if cell.bidirectional:
+                    x = (x[:, :, :x.shape[2]//2] + x[:, :, x.shape[2]//2:]) / 2 # Average between forward and backward
+            to_MLP = (ht[0] + ht[1]) / 2 # Average between forward and backward
             out = self.model(to_MLP)
         else:
             out = self.model(x)
         if categorical:
-            return torch.nn.sigmoid(out)
+            return self.sigmoid(out)
         else:
             return out
