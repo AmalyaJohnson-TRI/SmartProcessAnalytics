@@ -854,8 +854,10 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         if 'val_loss_file' not in kwargs or kwargs['val_loss_file'] is None:
             time_now = '-'.join([str(elem) for elem in localtime()[:6]]) # YYYY-MM-DD-hh-mm-ss
             kwargs['val_loss_file'] = f'ANN_val-loss_{time_now}.csv'
+        if 'expand_hyperparameter_search' not in kwargs:
+            kwargs['expand_hyperparameter_search'] = False
 
-        def CV_model(X_unscaled, y_unscaled, loss_function, cv_type, K_fold, Nr, group, kwargs):
+        def CV_model(X_unscaled, y_unscaled, loss_function, cv_type, K_fold, Nr, group, kwargs, hyperparam_list = None):
             """
             This function runs a cross-validation procedure for each combination of MLP / RNN hyperparameters.
             Results are saved in the kwargs['val_loss_file'] .csv file.
@@ -870,11 +872,12 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                 final_val_loss = pd.DataFrame(np.nan, index = my_idx, columns = [str(elem) for elem in kwargs['MLP_layers']])
 
             # Train and validate
-            hyperparam_list = list(product(kwargs['MLP_layers'], kwargs['learning_rate'], kwargs['activation']))
+            if hyperparam_list is None:
+                hyperparam_list = list(product(kwargs['MLP_layers'], kwargs['learning_rate'], kwargs['activation']))
             for cur_idx, cur_hp in enumerate(hyperparam_list): # cur_hp is (layers, lr, activation)
                 # We added a new layer configuration to the hyperparameters
                 if not str(cur_hp[0]) in list(final_val_loss.columns):
-                    final_val_loss.insert(layers.index(cur_hp[0]), str(cur_hp[0]), np.nan) # layers.index to ensure consistent order
+                    final_val_loss.insert(kwargs['MLP_layers'].index(cur_hp[0]), str(cur_hp[0]), np.nan) # layers.index to ensure consistent order
                 # We added a new activation or learning rate to the hyperparameters
                 elif not (cur_hp[2], cur_hp[1]) in final_val_loss.index.to_list():
                     final_val_loss.loc[(cur_hp[2], cur_hp[1]), :] = np.nan
@@ -914,7 +917,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                         val_loader_fold = DataLoader(val_dataset_fold, kwargs['batch_size'], shuffle = True)
 
                         # Declaring the model and optimizer
-                        model = SequenceMLP(cur_hp[0], cur_hp[2], X_train_scale.shape[-1], kwargs['RNN_layers'], kwargs['device']).to(kwargs['device'])
+                        model = my_ANN(cur_hp[0], cur_hp[2], X_train_scale.shape[-1], kwargs['RNN_layers'], kwargs['device']).to(kwargs['device'])
                         optimizer = torch.optim.AdamW(model.parameters(), lr = cur_hp[1], weight_decay = kwargs['weight_decay'])
                         if kwargs['scheduler'].casefold() == 'plateau':
                             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, kwargs['scheduler_mode'], kwargs['scheduler_factor'], kwargs['scheduler_patience'], min_lr = kwargs['scheduler_min_lr'])
@@ -944,6 +947,64 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                     final_val_loss.to_csv(kwargs['val_loss_file'])
             return final_val_loss
         final_val_loss = CV_model(X_unscaled, y_unscaled, loss_function, cv_type, K_fold, Nr, group, kwargs)
+        # Finding the best hyperparameters
+        best_idx, best_LR, best_neurons, best_act, best_act_loc = _get_best_hyperparameters(final_val_loss)
+        # Checking whether the best hyperparameters are in the extremes of what was cross-validated
+        extreme_LR = best_idx[0] in {best_act_loc.start, best_act_loc.stop-1} # Whether the best LR was either the highest or the lowest value checked for the best activation function
+        layer_mask = np.array([len(elem) for elem in kwargs['MLP_layers']]) == len(best_neurons) # Check only MLP configurations with the same number of layers
+        layers_for_extreme = np.sort(np.array(kwargs['MLP_layers'], dtype = object)[layer_mask])
+        extreme_neuron = best_neurons in [layers_for_extreme[0], layers_for_extreme[-1]]  # Whether the best neuron was either the largest or the smallest combination checked # TODO: MLP configurations with more than 1 hidden layer will benefit from a more thorough analysis of extremity
+        while (extreme_LR or extreme_neuron) and kwargs['expand_hyperparameter_search']:
+            print(f'Expanding the hyperparameters using the "{kwargs["expand_hyperparameter_search"]}" rule')
+            hyperparam_list = list(product(kwargs['MLP_layers'], kwargs['learning_rate'], kwargs['activation'])) # Used when kwargs['expand_hyperparameter_search'] == 'single'
+            # New LR value
+            if best_idx[0] == best_act_loc.start: # The best LR was the highest value tested
+                new_LR = best_LR * np.sqrt(10)
+                kwargs['learning_rate'].append(new_LR)
+            elif best_idx[0] == best_act_loc.stop-1: # The best LR was the lowest value tested
+                new_LR = best_LR / np.sqrt(10)
+                kwargs['learning_rate'].append(new_LR)
+            # New MLP layer configuration
+            new_neurons = best_neurons[:] # [:] makes a copy
+            if best_neurons == layers_for_extreme[0] and best_neurons[0][1] != 1: # The best layer configuration was the smallest configuration tested. != 1 to avoid infinite loop
+                if best_neurons[0][1] > X.shape[1]:
+                    new_neurons[0] = (new_neurons[0][0], new_neurons[0][1] - X.shape[1])
+                    new_neurons[1] = (new_neurons[1][0] - X.shape[1], new_neurons[0][0])
+                else: # The layer is <= X.shape[1], so we'll simply divide it by 2
+                    new_neurons[0] = (new_neurons[0][0], new_neurons[0][1] // 2)
+                    new_neurons[1] = (new_neurons[1][0] // 2, new_neurons[0][0])
+                kwargs['MLP_layers'].append(new_neurons)
+                if len(best_neurons) > 2: # 2 (or more) hidden layers
+                    pass
+            elif best_neurons == layers_for_extreme[-1]: # The best layer configuration was the largest configuration tested
+                new_neurons[0] = (new_neurons[0][0], new_neurons[0][1] + X.shape[1])
+                new_neurons[1] = (new_neurons[1][0] + X.shape[1], new_neurons[0][0])
+                kwargs['MLP_layers'].append(new_neurons)
+                if len(best_neurons) > 2: # 2 (or more) hidden layers
+                    pass
+            if kwargs['expand_hyperparameter_search'].casefold() == 'grid':
+                if best_act not in kwargs['activation']:
+                    print(f'WARNING: the best activation function ({best_act}) is not among the input activations, which means hyperparameters using it will not be tested\n' +
+                          f'\tInclude it in the SPA call (as activation = ["{best_act}", "other", "activations"]) to ensure its hyperparameters, too, will be tested.')
+                final_val_loss = CV_model(X_unscaled, y_unscaled, loss_function, cv_type, K_fold, Nr, group, kwargs)
+            elif kwargs['expand_hyperparameter_search'].casefold() == 'single':
+                if 'new_LR' in locals() and 'new_neurons' in locals() and (new_neurons, new_LR, best_act) not in hyperparam_list: # Adding both a new LR and a new layer configuration
+                    hyperparam_list.append((new_neurons, new_LR, best_act))
+                if 'new_LR' in locals() and (best_neurons, new_LR, best_act) not in hyperparam_list: # Adding a new LR with the other best hyperparameters
+                    hyperparam_list.append((best_neurons, new_LR, best_act))
+                    del new_LR # To avoid an infinite loop, as the if statement check for the presence of this variable in locals()
+                if 'new_neurons' in locals() and (new_neurons, best_LR, best_act) not in hyperparam_list: # Adding a new layer configuration with the other best hyperparameters
+                    hyperparam_list.append((new_neurons, best_LR, best_act))
+                    del new_neurons # To avoid an infinite loop, as the if statement check for the presence of this variable in locals()
+                final_val_loss = CV_model(X_unscaled, y_unscaled, loss_function, cv_type, K_fold, Nr, group, kwargs, hyperparam_list)
+            # Finding the best hyperparameters
+            best_idx, best_LR, best_neurons, best_act, best_act_loc = _get_best_hyperparameters(final_val_loss)
+            # Checking whether the best hyperparameters are in the extremes of what was cross-validated
+            extreme_LR = best_idx[0] in {best_act_loc.start, best_act_loc.stop-1} # Whether the best LR was either the highest or the lowest value checked for the best activation function
+            layer_mask = np.array([len(elem) for elem in kwargs['MLP_layers']]) == len(best_neurons) # Check only MLP configurations with the same number of layers
+            layers_for_extreme = np.sort(np.array(kwargs['MLP_layers'], dtype = object)[layer_mask])
+            extreme_neuron = (best_neurons in [layers_for_extreme[0], layers_for_extreme[-1]] and best_neurons[0][1] != 1) # Whether the best neuron was either the largest or the smallest combination checked # TODO: MLP configurations with more than 1 hidden layer will benefit from a more thorough analysis of extremity
+            pdb.set_trace()
         # Creating LongTensors if using cross-entropy
         if not kwargs['use_cross_entropy']:
             y = torch.Tensor(y)
@@ -956,27 +1017,8 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         train_loader = DataLoader(train_dataset, kwargs['batch_size'], shuffle = True)
         test_dataset = MyDataset(torch.Tensor(X_test), y_test)
         test_loader = DataLoader(test_dataset, kwargs['batch_size'], shuffle = True)
-        # Finding the best hyperparameters
-        best_idx = np.unravel_index(np.nanargmin(final_val_loss.values), final_val_loss.shape)
-        best_LR = final_val_loss.index[best_idx[0]][1]
-        best_neurons_str = final_val_loss.columns[best_idx[1]]
-        best_act = final_val_loss.index[best_idx[0]][0]
-        # Converting the best number of neurons from str to list
-        best_neurons = []
-        temp_number = []
-        temp_tuple = []
-        for elem in best_neurons_str:
-            if elem in '0123456789':
-                temp_number.append(elem)
-            elif elem in {',', ')'} and temp_number: # Finished a number. 2nd check because there is a comma right after )
-                converted_number = ''.join(temp_number)
-                temp_tuple.append( int(converted_number) )
-                temp_number = []
-            if elem in {')'}: # Also finished a tuple
-                best_neurons.append(tuple(temp_tuple))
-                temp_tuple = []
         # Re-declaring the model
-        model = SequenceMLP(best_neurons, best_act, X.shape[-1], kwargs['RNN_layers'], kwargs['device']).to(kwargs['device'])
+        model = my_ANN(best_neurons, best_act, X.shape[-1], kwargs['RNN_layers'], kwargs['device']).to(kwargs['device'])
         optimizer = torch.optim.AdamW(model.parameters(), lr = best_LR, weight_decay = kwargs['weight_decay'])
         if kwargs['scheduler'].casefold() in {'plateau', 'cosine'}:
             scheduler = CosineScheduler(kwargs['n_epochs']-30, base_lr = best_LR, warmup_steps = 10, final_lr = best_LR/2)
@@ -990,9 +1032,10 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                     param_group['lr'] = scheduler(epoch)
         # Final evaluation
         test_loss, test_pred = loop_model(model, optimizer, test_loader, loss_function, epoch, kwargs['batch_size'], evaluation = True, categorical = kwargs['use_cross_entropy'])
-        return model, final_val_loss, train_loss, test_loss, np.array(train_pred, dtype = float), np.array(test_pred, dtype = float), (best_neurons_str, best_LR, best_act) # Converting to float to save as JSON in SPA.py
+        return model, final_val_loss, train_loss, test_loss, np.array(train_pred, dtype = float), np.array(test_pred, dtype = float), (str(best_neurons), best_LR, best_act) # Converting to float to save as JSON in SPA.py
 
         # Old stuff, changes / updates TODO
+        """
         if 'IC' in cv_type: # Information criterion
             IC_result = np.zeros( (len(kwargs['activation']), len(kwargs['MLP_layers']), len(kwargs['learning_rate'])) )
             for i in range(len(kwargs['cell_type'])):
@@ -1010,33 +1053,6 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                             IC_result[i,j,k] = AIC
             # Min IC value (first occurrence)
             ind = np.unravel_index(np.argmin(IC_result, axis=None), IC_result.shape)
-        else: # Cross-validation
-            MSE_result = np.empty((len(kwargs['cell_type']), len(kwargs['activation']), len(kwargs['RNN_layers']), K_fold*Nr)) * np.nan
-            if kwargs['robust_priority']:
-                S = np.empty((len(kwargs['cell_type']), len(kwargs['activation']), len(kwargs['RNN_layers']), K_fold*Nr)) * np.nan
-
-            for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, cv_type, K_fold, Nr, group = group)):
-                for i in range(len(kwargs['cell_type'])):
-                    for j in range(len(kwargs['activation'])):
-                        for k in range(len(kwargs['RNN_layers'])):
-                            _, _, _, _, _, val_loss, _ = RNN.timeseries_RNN_feedback_single_train(X, y, X_val, y_val, None, None, kwargs['val_ratio'], kwargs['cell_type'][i],
-                                    kwargs['activation'][j], kwargs['RNN_layers'][k], kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'],
-                                    kwargs['lambda_l2_reg'], kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test,
-                                    output_prob_test, state_prob_test, kwargs['max_checks_without_progress'], kwargs['epoch_before_val'], kwargs['save_location'], plot = False)
-                            MSE_result[i, j, k, counter] = val_loss
-                            if kwargs['robust_priority']:
-                                S[i, j, k, counter] = k + i + j # TODO: is this scoring system correct? It ignores the actual values of the parameters, caring only about their positions in the array.
-
-            MSE_mean = np.nanmean(MSE_result, axis = 3)
-            # Min MSE value (first occurrence)
-            ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
-            if kwargs['robust_priority']:
-                MSE_std = np.nanstd(MSE_result, axis = 3)
-                MSE_min = MSE_mean[ind]
-                MSE_bar = MSE_min + MSE_std[ind]
-                S_val = np.nansum(S, axis = 3)
-                ind = np.nonzero( S_val == np.nanmin(S_val[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
-                ind = (ind[0][0], ind[1][0], ind[2][0])
 
         # Hyperparameter setup
         cell_type = kwargs['cell_type'][ind[0]]
@@ -1060,128 +1076,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             hyperparams['IC_optimal'] = IC_result[ind]
         else:
             hyperparams['MSE_val'] = MSE_mean[ind]
-        return(hyperparams, kwargs['save_location'], prediction_train, prediction_val, prediction_test, train_loss_final, val_loss_final, test_loss_final)
-
-    elif model_name == 'RNN':
-        import timeseries_regression_RNN as RNN
-        input_size_x = X.shape[1]
-
-        # Model architecture
-        if 'cell_type' not in kwargs:
-            kwargs['cell_type'] = ['lstm']
-        if 'activation' not in kwargs:
-            kwargs['activation'] = ['relu']
-        if 'RNN_layers' not in kwargs:
-            kwargs['RNN_layers'] = [[input_size_x]]
-
-        # Training parameters
-        if 'batch_size' not in kwargs:
-            kwargs['batch_size'] = 32
-        if 'epoch_overlap' not in kwargs:
-            kwargs['epoch_overlap'] = None
-        if 'num_steps' not in kwargs:
-            kwargs['num_steps'] = 10
-        if 'learning_rate' not in kwargs:
-            kwargs['learning_rate'] = 1e-3
-        if 'lambda_l2_reg' not in kwargs:
-            kwargs['lambda_l2_reg'] = 0
-        if 'num_epochs' not in kwargs:
-            kwargs['num_epochs'] = 100
-        # Dropout parameters
-        if 'input_prob' not in kwargs:
-            kwargs['input_prob'] = 0.95
-        if 'output_prob' not in kwargs:
-            kwargs['output_prob'] = 0.95
-        if 'state_prob' not in kwargs:
-            kwargs['state_prob'] = 0.95
-        # Currently we do not support BRNNs, so always keep all neurons during test
-        input_prob_test = 1
-        output_prob_test = 1
-        state_prob_test = 1
-
-        # Early stopping
-        if 'val_ratio' not in kwargs and X_val is None:
-            kwargs['val_ratio'] = 0.2
-        else:
-            kwards['val_ratio'] = 0
-        if 'max_checks_without_progress' not in kwargs:
-            kwargs['max_checks_without_progress'] = 50
-        if 'epoch_before_val' not in kwargs:
-            kwargs['epoch_before_val'] = 50
-
-        if 'save_location' not in kwargs:
-            kwargs['save_location'] = 'RNN_feedback_0'
-        if 'plot' not in kwargs:
-            kwargs['plot'] = False
-
-        if 'IC' in cv_type: # Information criterion
-            IC_result = np.zeros( (len(kwargs['cell_type']), len(kwargs['activation']), len(kwargs['RNN_layers'])) )
-            for i in range(len(kwargs['cell_type'])):
-                for j in range(len(kwargs['activation'])):
-                    for k in range(len(kwargs['RNN_layers'])):
-                        _, _, _, (AIC,AICc,BIC), _, _, _ = RNN.timeseries_RNN_feedback_single_train(X, y, X_val, y_val, None, None, kwargs['val_ratio'], kwargs['cell_type'][i],
-                                    kwargs['activation'][j], kwargs['RNN_layers'][k], kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'],
-                                    kwargs['lambda_l2_reg'], kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test,
-                                    output_prob_test, state_prob_test, kwargs['max_checks_without_progress'], kwargs['epoch_before_val'], kwargs['save_location'], plot = False)
-                        if cv_type == 'AICc':
-                            IC_result[i,j,k] = AICc
-                        elif cv_type == 'BIC':
-                            IC_result[i,j,k] = BIC
-                        else:
-                            IC_result[i,j,k] = AIC
-            # Min IC value (first occurrence)
-            ind = np.unravel_index(np.argmin(IC_result, axis=None), IC_result.shape)
-        else: # Cross-validation
-            MSE_result = np.empty((len(kwargs['cell_type']), len(kwargs['activation']), len(kwargs['RNN_layers']), K_fold*Nr)) * np.nan
-            if kwargs['robust_priority']:
-                S = np.empty((len(kwargs['cell_type']), len(kwargs['activation']), len(kwargs['RNN_layers']), K_fold*Nr)) * np.nan
-
-            for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, cv_type, K_fold, Nr, group = group)):
-                for i in range(len(kwargs['cell_type'])):
-                    for j in range(len(kwargs['activation'])):
-                        for k in range(len(kwargs['RNN_layers'])):
-                            _, _, _, _, _, val_loss, _ = RNN.timeseries_RNN_feedback_single_train(X, y, X_val, y_val, None, None, kwargs['val_ratio'], kwargs['cell_type'][i],
-                                    kwargs['activation'][j], kwargs['RNN_layers'][k], kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'],
-                                    kwargs['lambda_l2_reg'], kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test,
-                                    output_prob_test, state_prob_test, kwargs['max_checks_without_progress'], kwargs['epoch_before_val'], kwargs['save_location'], plot = False)
-                            MSE_result[i, j, k, counter] = val_loss
-                            if kwargs['robust_priority']:
-                                S[i, j, k, counter] = k + i + j # TODO: is this scoring system correct? It ignores the actual values of the parameters, caring only about their positions in the array.
-
-            MSE_mean = np.nanmean(MSE_result, axis = 3)
-            # Min MSE value (first occurrence)
-            ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
-            if kwargs['robust_priority']:
-                MSE_std = np.nanstd(MSE_result, axis = 3)
-                MSE_min = MSE_mean[ind]
-                MSE_bar = MSE_min + MSE_std[ind]
-                S_val = np.nansum(S, axis = 3)
-                ind = np.nonzero( S_val == np.nanmin(S_val[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
-                ind = (ind[0][0], ind[1][0], ind[2][0])
-
-        # Hyperparameter setup
-        cell_type = kwargs['cell_type'][ind[0]]
-        activation = kwargs['activation'][ind[1]]
-        RNN_layers = kwargs['RNN_layers'][ind[2]]
-
-        prediction_train, prediction_val, prediction_test, _, train_loss_final, val_loss_final, test_loss_final = RNN.timeseries_RNN_feedback_single_train(X, y, None, None, X_test, y_test,
-                kwargs['val_ratio'], cell_type, activation, RNN_layers, kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'], kwargs['lambda_l2_reg'],
-                kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test, output_prob_test, state_prob_test, kwargs['max_checks_without_progress'],
-                kwargs['epoch_before_val'], kwargs['save_location'], kwargs['plot'])
-
-        hyperparams = {}
-        hyperparams['cell_type'] = cell_type
-        hyperparams['activation'] = activation
-        hyperparams['RNN_layers'] = RNN_layers
-        hyperparams['training_params'] = {'batch_size': kwargs['batch_size'], 'epoch_overlap': kwargs['epoch_overlap'], 'num_steps': kwargs['num_steps'], 'learning_rate': kwargs['learning_rate'],
-                                        'lambda_l2_reg': kwargs['lambda_l2_reg'], 'num_epochs': kwargs['num_epochs']}
-        hyperparams['drop_out'] = {'input_prob': kwargs['input_prob'], 'output_prob': kwargs['output_prob'], 'state_prob': kwargs['state_prob']}
-        hyperparams['early_stop'] = {'val_ratio': kwargs['val_ratio'], 'max_checks_without_progress': kwargs['max_checks_without_progress'], 'epoch_before_val': kwargs['epoch_before_val']}
-        if 'IC' in cv_type:
-            hyperparams['IC_optimal'] = IC_result[ind]
-        else:
-            hyperparams['MSE_val'] = MSE_mean[ind]
-        return(hyperparams, kwargs['save_location'], prediction_train, prediction_val, prediction_test, train_loss_final, val_loss_final, test_loss_final)
+        return(hyperparams, kwargs['save_location'], prediction_train, prediction_val, prediction_test, train_loss_final, val_loss_final, test_loss_final)"""
 
 @ignore_warnings()
 def _ALVEN_joblib_fun(X_train, y_train, X_val, y_val, eps, alpha_num, kwargs, counter, prod_idx, this_prod):
@@ -1277,9 +1172,9 @@ def loop_model(model, optimizer, loader, loss_function, epoch, batch_size, evalu
     return total_loss, total_pred_y
 
 # MLP or LSTM+MLP model
-class SequenceMLP(torch.nn.Module):
+class my_ANN(torch.nn.Module):
     def __init__(self, layers, activ_fun = 'relu', lstm_input_size = 0, lstm_hidden_size = 0, device = 'cuda'):
-        super(SequenceMLP, self).__init__()
+        super(my_ANN, self).__init__()
         # Setup to convert string to activation function
         if activ_fun == 'relu':
             torch_activ_fun = torch.nn.ReLU()
@@ -1328,3 +1223,28 @@ class SequenceMLP(torch.nn.Module):
             return self.sigmoid(out)
         else:
             return out
+def _get_best_hyperparameters(final_val_loss):
+    """
+    A helper function to obtain and format the best hyperparameters after cross-validation of an MLP or RNN model.
+    Is called automatically by SPA and shouldn't be called by the user.
+    """
+    best_idx = np.unravel_index(np.nanargmin(final_val_loss.values), final_val_loss.shape)
+    best_LR = final_val_loss.index[best_idx[0]][1]
+    best_neurons_str = final_val_loss.columns[best_idx[1]]
+    best_act = final_val_loss.index[best_idx[0]][0]
+    best_act_loc = final_val_loss.index.get_loc(best_act)
+    # Converting the best number of neurons from str to list
+    best_neurons = []
+    temp_number = []
+    temp_tuple = []
+    for elem in best_neurons_str:
+        if elem in '0123456789':
+            temp_number.append(elem)
+        elif elem in {',', ')'} and temp_number: # Finished a number. 2nd check because there is a comma right after )
+            converted_number = ''.join(temp_number)
+            temp_tuple.append( int(converted_number) )
+            temp_number = []
+        if elem in {')'}: # Also finished a tuple
+            best_neurons.append(tuple(temp_tuple))
+            temp_tuple = []
+    return best_idx, best_LR, best_neurons, best_act, best_act_loc
