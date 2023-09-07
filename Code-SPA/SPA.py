@@ -632,7 +632,7 @@ def run_DALVEN(model_name, X, y, X_test, y_test, cv_method, alpha_num, lag, degr
     else:
         mystring = 'mse_val'
     DALVEN_hyper, DALVEN_model, DALVEN_params, mse_train_DALVEN, mse_test_DALVEN, yhat_train_DALVEN, yhat_test_DALVEN, MSE_v_DALVEN, final_list = cv.CV_mse(model_name,
-            X, y, X_test, y_test, cv_method, K_fold, Nr, alpha_num = alpha_num, lag = lag, degree = degree, l1_ratio = l1_ratio, label_name = True,
+            X, y, X_test, y_test, cv_type = cv_method, K_fold = K_fold, Nr = Nr, alpha_num = alpha_num, lag = lag, degree = degree, l1_ratio = l1_ratio, label_name = True,
             trans_type = trans_type, robust_priority = robust_priority, use_cross_entropy = use_cross_entropy)
 
     return {'model_hyper': DALVEN_hyper,'final_model': DALVEN_model, 'model_params': DALVEN_params , 'mse_train': mse_train_DALVEN, mystring: MSE_v_DALVEN,

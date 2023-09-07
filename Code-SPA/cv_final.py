@@ -431,8 +431,8 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             kwargs['l1_ratio'] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99][::-1]
         if 'degree' not in kwargs:
             kwargs['degree'] = [1, 2, 3]
-        if 'label_name' not in kwargs:
-            kwargs['label_name'] = False
+        if 'label_name' not in kwargs: # Whether to auto-generate label names for the variables [x1, x2, ..., log(x1), ..., 1/x1, ..., x1*x2, etc.]
+            kwargs['label_name'] = True
         if 'selection' not in kwargs:
             kwargs['selection'] = 'p_value'
         if 'select_value' not in kwargs:
@@ -485,7 +485,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             Xtrans, _ = nr.poly_feature(X, degree = degree, interaction = True, power = True)
         sel = VarianceThreshold(threshold=eps).fit(Xtrans)
 
-        if kwargs['label_name'] :
+        if kwargs['label_name']:
             if 'xticks' in kwargs:
                 list_name = kwargs['xticks']
             else:
@@ -667,22 +667,22 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
 
         with Parallel(n_jobs = -1) as PAR:
             if 'IC' in cv_type: # Information criterion
-                temp = PAR(delayed(_DALVEN_joblib_fun)(X_train, y_train, X_val, y_val, eps, alpha_num, kwargs, counter,
-                        prod_idx, this_prod) for prod_idx, this_prod in enumerate(hyperparam_prod))
+                temp = PAR(delayed(_DALVEN_joblib_fun)(X, y, X_test, y_test, eps, alpha_num, kwargs, prod_idx, this_prod) for prod_idx, this_prod in enumerate(hyperparam_prod))
+                temp = list(zip(*temp))[2] # To isolate the (AIC, AICc, BIC) tuple, which is the 3rd subentry of each entry in the original temp
+                temp = np.array(temp)
                 if cv_type == 'AICc':
-                    IC_result = zip(*temp)[2][1]
+                    IC_result = temp[:, 1]
                 elif cv_type == 'BIC':
-                    IC_result = zip(*temp)[2][2]
+                    IC_result = temp[:, 2]
                 else: # AIC
-                    IC_result = zip(*temp)[2][0]
+                    IC_result = temp[:, 0]
                 # Min IC value (first occurrence)
                 ind = np.argmin(IC_result)
             else: # Cross-validation
                 MSE_result = np.empty((len(kwargs['degree']) * alpha_num * len(kwargs['l1_ratio']) * len(kwargs['lag']), K_fold*Nr)) * np.nan
                 Var = np.empty((len(kwargs['degree']) * alpha_num * len(kwargs['l1_ratio']) * len(kwargs['lag']), K_fold*Nr)) * np.nan
                 for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
-                    temp = PAR(delayed(_DALVEN_joblib_fun)(X_train, y_train, X_val, y_val, eps, alpha_num, kwargs, counter,
-                            prod_idx, this_prod) for prod_idx, this_prod in enumerate(hyperparam_prod))
+                    temp = PAR(delayed(_DALVEN_joblib_fun)(X_train, y_train, X_val, y_val, eps, alpha_num, kwargs, prod_idx, this_prod, counter) for prod_idx, this_prod in enumerate(hyperparam_prod))
                     MSE_result[:, counter], Var[:, counter], _ = zip(*temp)
 
                 MSE_mean = np.nanmean(MSE_result, axis = 1)
@@ -791,7 +791,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
 
         else:
             list_name_final =  []
-        
+
         if 'IC' in cv_type:
             return(hyperparams, DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, IC_result[ind], list_name_final)
         else:
@@ -1004,7 +1004,6 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             layer_mask = np.array([len(elem) for elem in kwargs['MLP_layers']]) == len(best_neurons) # Check only MLP configurations with the same number of layers
             layers_for_extreme = np.sort(np.array(kwargs['MLP_layers'], dtype = object)[layer_mask])
             extreme_neuron = (best_neurons in [layers_for_extreme[0], layers_for_extreme[-1]] and best_neurons[0][1] != 1) # Whether the best neuron was either the largest or the smallest combination checked # TODO: MLP configurations with more than 1 hidden layer will benefit from a more thorough analysis of extremity
-            pdb.set_trace()
         # Creating LongTensors if using cross-entropy
         if not kwargs['use_cross_entropy']:
             y = torch.Tensor(y)
@@ -1090,7 +1089,7 @@ def _ALVEN_joblib_fun(X_train, y_train, X_val, y_val, eps, alpha_num, kwargs, co
     return mse, np.sum(variable.flatten() != 0)
 
 @ignore_warnings()
-def _DALVEN_joblib_fun(X_train, y_train, X_val, y_val, eps, alpha_num, kwargs, counter, prod_idx, this_prod):
+def _DALVEN_joblib_fun(X_train, y_train, X_val, y_val, eps, alpha_num, kwargs, prod_idx, this_prod, counter = 0):
     """
     A helper function to parallelize DALVEN. Shouldn't be called by the user
     """
