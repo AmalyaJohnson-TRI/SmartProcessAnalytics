@@ -6,12 +6,11 @@ import statsmodels.api as sm
 from SPLS_Python import SPLS
 from sklearn.linear_model import ElasticNet, Lasso, Ridge
 from sklearn.cross_decomposition import PLSRegression
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 from sklearn.feature_selection import f_regression, VarianceThreshold
 from sklearn.metrics import mean_squared_error as MSE
 import numpy as np
 import numpy.matlib as matlib
-import nonlinear_regression as nr
 import warnings
 warnings.filterwarnings("ignore") # TODO: Want to just ignore the PLS constant residual warnings, but this will do for now
 
@@ -162,7 +161,7 @@ def LASSO_fitting(X, y, X_test, y_test, alpha, max_iter = 10000, tol = 1e-4):
     return (LASSO_model, LASSO_params, mse_train, mse_test, yhat_train, yhat_test)
 
 def ALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, alpha_num = None, cv = False, max_iter = 10000, 
-                tol = 1e-4, selection = 'p_value', select_value = 0.15, trans_type = 'auto', use_cross_entropy = False):
+                tol = 1e-4, selection = 'p_value', select_value = 0.15, trans_type = 'all', use_cross_entropy = False):
     """
     Fits data using Algebraic Learning Via Elastic Net
     https://doi.org/10.1016/j.compchemeng.2020.107103
@@ -190,23 +189,22 @@ def ALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, alpha_num =
         The minimum p_value for a variable to be considered relevant (when selection == 'p_value'), ...
             or the first select_value percent variables to be used (when selection == 'percentage').
         Not relevant when selection == 'elbow'
-    trans_type : str, optional, default = 'auto'
-        Feature transformation based on ALVEN ('auto') or polynomial ('poly')
+    trans_type : str in {'all', 'poly', 'simple_interaction'}, optional, default == 'all'
+        Whether to include all transforms (polynomial, log, sqrt, and inverse), only polynomial transforms (and, ...
+            optionally, interactions), or just interactions.
+        The log, sqrt, and inverse terms never include interactions among the same transform type (such as ln(x1)*ln(x4)), but ...
+            include some interactions among each other for the same variable (such as ln(x0)*1/x0, x0*sqrt(x0), etc.).
     use_cross_entropy : bool, optional, default = False
         Whether to use cross entropy or MSE for model comparison.
     """
 
     # Feature transformation
-    if trans_type == 'auto':
-        X, X_test = nr.feature_trans(X, X_test, degree = degree, interaction = 'later')
-    elif trans_type == 'poly':
-        X, X_test = nr.poly_feature(X, X_test, degree = degree, interaction = True, power = True)
-    else:
-        raise ValueError(f'trans_type must be "auto" or "poly", but you passed {trans_type}')
+    X, X_test, _ = _feature_trans(X, X_test, degree, interaction = True, trans_type = trans_type)
 
     # Remove features with insignificant variance
     sel = VarianceThreshold(threshold = tol).fit(X)
     X = sel.transform(X)
+    print(f'The shape of X after sel is {X.shape}')
     X_test = sel.transform(X_test)
 
     # Scale data (based on z-score)
@@ -278,7 +276,7 @@ def ALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, alpha_num =
     return (ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index)
 
 def DALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree, lag, alpha_num = None, cv = False, max_iter = 10000, 
-                tol = 1e-4, selection = 'p_value', select_value = 0.10, trans_type = 'auto', use_cross_entropy = False):
+                tol = 1e-4, selection = 'p_value', select_value = 0.10, trans_type = 'all', use_cross_entropy = False):
     """
     Fits data using Dynamic Algebraic Learning Via Elastic Net
     https://doi.org/10.1016/j.compchemeng.2020.107103
@@ -309,19 +307,17 @@ def DALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree, lag, alpha_num
         The minimum p_value for a variable to be considered relevant (when selection == 'p_value'), ...
             or the first select_value percent variables to be used (when selection == 'percentage').
         Not relevant when selection == 'elbow'
-    trans_type : str, optional, default = 'auto'
-        Feature transformation based on ALVEN ('auto') or polynomial ('poly')
+    trans_type : str in {'all', 'poly', 'simple_interaction'}, optional, default == 'all'
+        Whether to include all transforms (polynomial, log, sqrt, and inverse), only polynomial transforms (and, ...
+            optionally, interactions), or just interactions.
+        The log, sqrt, and inverse terms never include interactions among the same transform type (such as ln(x1)*ln(x4)), but ...
+            include some interactions among each other for the same variable (such as ln(x0)*1/x0, x0*sqrt(x0), etc.).
     use_cross_entropy : bool, optional, default = False
         Whether to use cross entropy or MSE for model comparison.
     """
 
     # Feature transformation
-    if trans_type == 'auto':
-        X, X_test = nr.feature_trans(X, X_test, degree = degree, interaction = 'later')
-    elif trans_type == 'poly':
-        X, X_test = nr.poly_feature(X, X_test, degree = degree, interaction = True, power = True)
-    else:
-        raise ValueError(f'trans_type must be "auto" or "poly", but you passed {trans_type}')
+    X, X_test, _ = _feature_trans(X, X_test, degree, trans_type = trans_type)
 
     # Lag padding for X
     XD = X[lag:]
@@ -417,7 +413,7 @@ def DALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree, lag, alpha_num
     return (DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index, (AIC,AICc,BIC))
 
 def DALVEN_fitting_full_nonlinear(X, y, X_test, y_test, alpha, l1_ratio, degree, lag, alpha_num = None, cv = False, max_iter = 10000, 
-                                tol = 1e-4, selection = 'p_value', select_value = 0.10, trans_type = 'auto', use_cross_entropy = False):
+                                tol = 1e-4, selection = 'p_value', select_value = 0.10, trans_type = 'all', use_cross_entropy = False):
     """
     Fits data using Dynamic Algebraic Learning Via Elastic Net - full non-linear mapping
     https://doi.org/10.1016/j.compchemeng.2020.107103
@@ -448,8 +444,11 @@ def DALVEN_fitting_full_nonlinear(X, y, X_test, y_test, alpha, l1_ratio, degree,
         The minimum p_value for a variable to be considered relevant (when selection == 'p_value'), ...
             or the first select_value percent variables to be used (when selection == 'percentage').
         Not relevant when selection == 'elbow'
-    trans_type : str, optional, default = 'auto'
-        Feature transformation based on ALVEN ('auto') or polynomial ('poly')
+    trans_type : str in {'all', 'poly', 'simple_interaction'}, optional, default == 'all'
+        Whether to include all transforms (polynomial, log, sqrt, and inverse), only polynomial transforms (and, ...
+            optionally, interactions), or just interactions.
+        The log, sqrt, and inverse terms never include interactions among the same transform type (such as ln(x1)*ln(x4)), but ...
+            include some interactions among each other for the same variable (such as ln(x0)*1/x0, x0*sqrt(x0), etc.).
     use_cross_entropy : bool, optional, default = False
         Whether to use cross entropy or MSE for model comparison.
     """
@@ -468,10 +467,7 @@ def DALVEN_fitting_full_nonlinear(X, y, X_test, y_test, alpha, l1_ratio, degree,
     y_test = y_test[lag:]
 
     # Feature transformation
-    if trans_type == 'auto':
-        XD, XD_test = nr.feature_trans(XD, XD_test, degree = degree, interaction = 'later')
-    else:
-        XD, XD_test = nr.poly_feature(XD, XD_test, degree = degree, interaction = True, power = True)
+    XD, XD_test, _ = _feature_trans(XD, XD_test, degree, trans_type = trans_type)
   
     # Remove features with insignificant variance
     sel = VarianceThreshold(threshold = tol).fit(XD)
@@ -552,3 +548,131 @@ def DALVEN_fitting_full_nonlinear(X, y, X_test, y_test, alpha, l1_ratio, degree,
         BIC = num_train*np.log(mse_train) + num_parameter*np.log(num_train)
     return (DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index, (AIC,AICc,BIC))
 
+def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type = 'all'):
+    """
+    A helper function that is automatically called by SPA.
+    Performs non-linear transformations of X (and X_test). Transformations include polynomial transforms up to "degree", ...
+    interactions between the raw variables in X (up to "degree" powers at the same time). If trans_type == 'all', also ...
+    includes ln, sqrt, and inverse transforms of power up to "degree". Also includes some interaction terms among them.
+
+    Parameters
+    ----------
+    X, y : Numpy array with shape N x m
+        Training data predictors.
+    X_test, y_test : Numpy array with shape N_test x m, optional, default = None
+        Testing data predictors.
+    degree : integer, optional, default = 2
+        The highest degree used for polynomial and interaction transforms.
+        For example, degree = 1 would include x0 to xN. Degree = 2 would also include (x0)^2 to (xN)^2...
+            and, if interaction == True, (x0*x1), (x0*x2), ..., (x0*xN), ..., (x1*xN) terms.
+    interaction : boolean, optional, default = True
+        Whether to include polynomial interaction terms up to "degree". For example, degree = 2 interactions include ...
+            terms of the x0*x1 form. Degree = 3 interactions also include terms of the x2*x3*x5 and (x1)^2 * x4 form
+    trans_type : str in {'all', 'poly', 'simple_interaction'}, optional, default == 'all'
+        Whether to include all transforms (polynomial, log, sqrt, and inverse), only polynomial transforms (and, ...
+            optionally, interactions), or just interactions.
+        The log, sqrt, and inverse terms never include interactions among the same transform type (such as ln(x1)*ln(x4)), but ...
+            include some interactions among each other for the same variable (such as ln(x0)*1/x0, x0*sqrt(x0), etc.).
+    """
+    X_test_out = None # Declaring this variable to avoid errors when doing the return statement
+    # Setting up the transforms
+    Xlog = np.where(X!=0, np.log(np.abs(X)), -50) # Avoiding log(0) = -inf
+    Xsqrt = np.sqrt(X)
+    Xinv = 1/X
+    Xinv[Xinv == np.inf] = 1e15
+    Xinv[Xinv == -np.inf] = -1e15
+    if X_test is not None:
+        Xlog_t = np.where(X_test!=0, np.log(np.abs(X_test)), -50) # Avoiding log(0) = -inf
+        Xsqrt_t = np.sqrt(X_test)
+        Xinv_t = 1/X_test
+        Xinv_t[Xinv_t == np.inf] = 1e15
+        Xinv_t[Xinv_t == -np.inf] = -1e15
+
+    # Polynomial transforms (and interaction terms)
+    poly = PolynomialFeatures(degree, include_bias = False, interaction_only = trans_type.casefold() == 'simple_interaction')
+    X_out = poly.fit_transform(X)
+    label_names = poly.get_feature_names_out()
+    interaction_column = np.array([' ' in elem for elem in label_names], dtype = bool) # To filter out interactions if user asked for a polynomial-only transform. Also for the log, sqrt, and inv terms below when poly_trans_only == False
+    for idx in range(len(label_names)):
+        label_names[idx] = label_names[idx].translate({ord(i): '*' for i in ' '}) # str.translate replaces the characters on the right of the for (in this case, a whitespace) with an asterisk
+    if X_test is not None:
+        X_test_out = poly.fit_transform(X_test)
+    # Discarding the interaction terms (x1*x2, x2*x3*x5, (x1)^2 * x4, etc.) if requested to do so by the user
+    if not interaction:
+        X_out = X_out[:, ~interaction_column]
+        label_names = label_names[~interaction_column]
+        if X_test is not None:
+            X_test_out = X_test_out[:, ~interaction_column]
+    # Including ln, sqrt, and inverse terms
+    if trans_type.casefold() == 'all': # TODO: the original SPA code had labels for transforms such as x^1.5 or 1/sqrt(x), but these were not implemented in the code. Should I do so?
+        # ln transform
+        Xlog_trans = poly.fit_transform(Xlog)[:, ~interaction_column] # Transforming and removing interactions, as we do not care about log-log interactions
+        X_out = np.column_stack((X_out, Xlog_trans))
+        temp_label_names = poly.get_feature_names_out()[~interaction_column]
+        for idx in range(len(temp_label_names)): # Converting the names from x0-like to ln(x0)-like
+            power_split = temp_label_names[idx].split('^') # Separates the variable (e.g.: x0 or x1) from the power it was raised to, if it exists
+            if len(power_split) > 1:
+                power = f'^{power_split[-1]}'
+                base = ''.join(power_split[:-1])
+            else: # Variable hasn't beed raised to any power (equivalent to ^1), but we need an empty "power" variable to avoid errors
+                power = ''
+                base = power_split[0]
+            temp_label_names[idx] = f'ln({base}){power}' # Final name is of the form ln(x1)^3, not ln(x1^3)
+        label_names = np.concatenate((label_names, temp_label_names))
+        if X_test is not None:
+            Xlog_test_trans = poly.fit_transform(Xlog_t)[:, ~interaction_column]
+            X_test_out = np.column_stack((X_test_out, Xlog_test_trans))
+        # sqrt transform
+        X_out = np.column_stack((X_out, Xsqrt))
+        temp_label_names = [f'sqrt(x{number})' for number in range(X.shape[1])]
+        label_names = np.concatenate((label_names, temp_label_names))
+        if X_test is not None:
+            X_test_out = np.column_stack((X_test_out, Xsqrt_t))
+        # Inverse transform
+        Xinv_trans = poly.fit_transform(Xinv)[:, ~interaction_column] # Transforming and removing interactions, as we do not care about inverse-inverse interactions
+        X_out = np.column_stack((X_out, Xinv_trans))
+        temp_label_names = poly.get_feature_names_out()[~interaction_column]
+        for idx in range(len(temp_label_names)): # Converting the names from x0-like to ln(x0)-like
+            temp_label_names[idx] = f'1/({temp_label_names[idx]})' # 1/(x1^3) is the same as (1/x1)^3, so we do not need the fancy manipulations used above in the ln transform naming
+        label_names = np.concatenate((label_names, temp_label_names))
+        if X_test is not None:
+            Xinv_test_trans = poly.fit_transform(Xinv_t)[:, ~interaction_column]
+            X_test_out = np.column_stack((X_test_out, Xinv_test_trans))
+        # Specific interactions between X, ln(X), sqrt(X), and 1/X that occur for degree >= 2
+        for power in range(1, degree):
+            power_name = f'^{power}' if power > 1 else '' # To avoid labeling things as x^1
+            normal_sqrt_interaction = X**power * Xsqrt
+            normal_sqrt_names = [f'x{number}{power_name}*sqrt(x{number})' for number in range(X.shape[1])]
+            sqrt_inv_interaction = Xsqrt * Xinv**power # Note that this is added later to X_out to respect the order in the original SPA code. No idea if there is some sort of meaning to the original order
+            sqrt_inv_names = [f'sqrt(x{number})*1/(x{number}{power_name})' for number in range(X.shape[1])]
+            log_inv_interaction = Xlog**power * Xinv
+            log_inv_names = [f'ln(x{number}){power_name}*1/(x{number})' for number in range(X.shape[1])]
+            if power == 1:
+                X_out = np.column_stack((X_out, normal_sqrt_interaction, log_inv_interaction, sqrt_inv_interaction))
+                label_names = np.concatenate((label_names, normal_sqrt_names, log_inv_names, sqrt_inv_names))
+            else: # Relevant only when power >= 2, and called separately to avoid two Xlog*Xinv
+                log_inv_interaction_two = Xlog * Xinv**power
+                log_inv_two_names = [f'ln(x{number})*1/(x{number}{power_name})' for number in range(X.shape[1])]
+                if power == 2: # Triple interaction TODO: degree >= 4 (power >= 3) would have powers of this triple interaction, but these powers have not been implemented in the original SPA, which limited degree to <= 3
+                    triple_interaction = Xlog * Xsqrt * Xinv
+                    triple_interaction_names = [f'ln(x{number})*sqrt({number})*1/(x{number})' for number in range(X.shape[1])]
+                    X_out = np.column_stack((X_out, normal_sqrt_interaction, log_inv_interaction, log_inv_interaction_two, sqrt_inv_interaction, triple_interaction))
+                    label_names = np.concatenate((label_names, normal_sqrt_names, log_inv_names, log_inv_two_names, sqrt_inv_names, triple_interaction_names))
+                else:
+                    X_out = np.column_stack((X_out, normal_sqrt_interaction, log_inv_interaction, log_inv_interaction_two, sqrt_inv_interaction))
+                    label_names = np.concatenate((label_names, normal_sqrt_names, log_inv_names, log_inv_two_names, sqrt_inv_names))
+            if X_test is not None:
+                normal_sqrt_interaction = X_test**power * Xsqrt_t
+                sqrt_inv_interaction = Xsqrt_t * Xinv_t**power # Note that this is added later to X_out to respect the order in the original SPA code. No idea if there is some sort of meaning to the original order
+                log_inv_interaction = Xlog_t**power * Xinv_t
+                if power == 1:
+                    X_test_out = np.column_stack((X_test_out, normal_sqrt_interaction, log_inv_interaction, sqrt_inv_interaction))
+                else: # Relevant only when power >= 2, and called separately to avoid two Xlog*Xinv
+                    log_inv_interaction_two = Xlog_t * Xinv_t**power
+                    if power == 2:
+                        triple_interaction = Xlog_t * Xsqrt_t * Xinv_t
+                        X_test_out = np.column_stack((X_test_out, normal_sqrt_interaction, log_inv_interaction, log_inv_interaction_two, sqrt_inv_interaction, triple_interaction))
+                    else:
+                        X_test_out = np.column_stack((X_test_out, normal_sqrt_interaction, log_inv_interaction, log_inv_interaction_two, sqrt_inv_interaction))
+
+    return (X_out, X_test_out, label_names)

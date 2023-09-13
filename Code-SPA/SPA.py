@@ -30,7 +30,7 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
             group_name = None, spectral_data = False, plot_interrogation = False, enough_data = False, nested_cv = False, robust_priority = False,
             dynamic_model = False, lag = [0], alpha = 0.01, cat = None, xticks = None, yticks = ['y'], model_name = None, cv_method = None, K_fold = 5, Nr = 10,
             alpha_num = 20, degree = [1, 2, 3], num_outer = 10, K_steps = 1, l1_ratio = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99],
-            trans_type = 'auto', select_value = 0.10, activation = ['relu'], MLP_layers = None, RNN_layers = None, batch_size = 32,
+            trans_type = 'all', select_value = 0.10, activation = ['relu'], MLP_layers = None, RNN_layers = None, batch_size = 32,
             learning_rate = [1e-2, 5e-3], weight_decay = 0, n_epochs = 100, class_loss = None, scheduler = 'plateau', scheduler_mode = 'min',
             scheduler_factor = 0.5, scheduler_patience = 10, scheduler_min_LR = None, scheduler_last_epoch = None, scheduler_warmup = 10,
             val_loss_file = None, expand_hyperparameter_search = False, maxorder = 10, ADAPTx_path = None, ADAPTx_save_path = None, ADAPTx_max_lag = 12, ADAPTx_degrees = [-1, 0, 1]):
@@ -123,9 +123,11 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
     l1_ratio : list of floats, optional, default = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99]
         Ratio of L1 penalty to total penalty. When l1_ratio == 1, only the L1 penalty is used.
         Relevant only when model_name in {'EN', 'ALVEN', 'DALVEN', 'DALVEN_full_nonlinear'}
-    trans_type : string, optional, default = 'auto'
-        The variables to be tested in ALVEN / DALVEN.
-        Must be either 'auto' (all variables) or 'poly' (polynomial powers only).
+    trans_type : str in {'all', 'poly', 'simple_interaction'}, optional, default == 'all'
+        Whether to include all transforms (polynomial, log, sqrt, and inverse), only polynomial transforms (and, ...
+            optionally, interactions), or just interactions.
+        The log, sqrt, and inverse terms never include interactions among the same transform type (such as ln(x1)*ln(x4)), but ...
+            include some interactions among each other for the same variable (such as ln(x0)*1/x0, x0*sqrt(x0), etc.).
     select_value : float, optional, default = 0.10
         The (p-value or percent) cutoff for ALVEN / DALVEN to select a variable
     activation : list of str, optional, default = ['relu']

@@ -15,7 +15,7 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 import statsmodels.stats.api as sms
 import statsmodels.api as sm
 import scipy.stats as stats
-import nonlinear_regression as nr
+import regression_models as rm
 from sklearn.feature_selection import f_regression
 from sklearn.linear_model import Ridge
 
@@ -37,8 +37,8 @@ def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference 
     Output:
         int, whether there is nonlinearity in dataset
     """
-    Bi, _  = nr.poly_feature(X, degree = 2, interaction = True, power = False)
-    Bi = Bi[:,X.shape[1]:]
+    poly = PolynomialFeatures(2, include_bias = False, interaction_only = True)
+    Bi = poly.fit_transform(X)[:, X.shape[1]:] # Just the interactions and not the x0, x1, ..., xN terms
   
     # Nonlinearity by linear correlation, quadratic test, and maximal correlation
     m = np.shape(X)[1]
@@ -552,8 +552,8 @@ def nonlinearity_assess_dynamic(X, y, plot = True, cat = None, alpha = 0.01, dif
     
     if m > 1:
         # For quadratic test
-        Bi, _  = nr.poly_feature(X, degree = 2, interaction = True, power = False)
-        Bi = Bi[:,X.shape[1]:]
+        poly = PolynomialFeatures(2, include_bias = False, interaction_only = True)
+        Bi = poly.fit_transform(X)[:, X.shape[1]:] # Just the interactions and not the x0, x1, ..., xN terms
         bi_test_result = np.zeros(l+1)
         for l in range(lag):
             p_values = np.zeros((Bi.shape[1],1))

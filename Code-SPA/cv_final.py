@@ -11,7 +11,6 @@ from sklearn.feature_selection import VarianceThreshold
 from sklearn.utils._testing import ignore_warnings
 from sklearn.metrics import mean_squared_error as MSE
 import regression_models as rm
-import nonlinear_regression as nr
 import nonlinear_regression_other as nro
 from itertools import product
 from joblib import Parallel, delayed
@@ -438,7 +437,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         if 'select_value' not in kwargs:
             kwargs['select_value'] = 0.10
         if 'trans_type' not in kwargs:
-            kwargs['trans_type'] = 'auto'
+            kwargs['trans_type'] = 'all'
         if 'use_cross_entropy' not in kwargs:
             kwargs['use_cross_entropy'] = False
 
@@ -478,56 +477,12 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         hyperparams['degree'] = degree
         hyperparams['retain_index'] = retain_index
 
-        # Names for the retained variables(?)
-        if kwargs['trans_type'] == 'auto':
-            Xtrans, _ = nr.feature_trans(X, degree = degree, interaction = 'later')
-        else:
-            Xtrans, _ = nr.poly_feature(X, degree = degree, interaction = True, power = True)
+        # Names for the retained variables
+        Xtrans, _, label_names = rm._feature_trans(X, degree = degree, trans_type = kwargs['trans_type'])
         sel = VarianceThreshold(threshold=eps).fit(Xtrans)
-
-        if kwargs['label_name']:
-            if 'xticks' in kwargs:
-                list_name = kwargs['xticks']
-            else:
-                list_name = [f'x{i}' for i in range(1, np.shape(X)[1]+1)]
-
-            list_name_final = list_name[:] # [:] makes a copy
-            if kwargs['trans_type'] == 'auto':
-                list_name_final += [f'log({name})' for name in list_name] + [f'sqrt({name})' for name in list_name] + [f'1/{name}' for name in list_name]
-
-                if degree >= 2:
-                    for i in range(X.shape[1]-1):
-                        for j in range(i+1, X.shape[1]):
-                            list_name_final += [f'{list_name[i]}*{list_name[j]}']
-                    list_name_final += [f'{name}^2' for name in list_name] + [f'(log{name})^2' for name in list_name] + [f'1/{name}^2' for name in list_name] + (
-                            [f'{name}^1.5' for name in list_name] + [f'log({name})/{name}' for name in list_name]+ [f'1/{name}^0.5' for name in list_name] )
-
-                if degree >= 3:
-                    for i in range(X.shape[1]-2):
-                        for j in range(i+1, X.shape[1]-1):
-                            for k in range(j+1, X.shape[1]):
-                                list_name_final += [f'{list_name[i]}*{list_name[j]}*{list_name[k]}']
-                    list_name_final += [f'{name}^3' for name in list_name] + [f'(log{name})^3' for name in list_name] + [f'1/{name}^3' for name in list_name] + (
-                                [f'{name}^2.5' for name in list_name] + [f'(log{name})^2/{name}' for name in list_name]+ [f'log({name})/sqrt({name})' for name in list_name] +
-                                [f'log({name})/{name}^2' for name in list_name] + [f'{name}^-1.5' for name in list_name] )
-
-            elif degree >= 2:
-                for i in range(X.shape[1]):
-                    for j in range(i, X.shape[1]):
-                        list_name_final += [f'{list_name[i]}*{list_name[j]}']
-                if degree >= 3:
-                    for i in range(X.shape[1]):
-                        for j in range(i, X.shape[1]):
-                            for k in range(j, X.shape[1]):
-                                list_name_final += [f'{list_name[i]}*{list_name[j]}*{list_name[k]}']
-
-            index = list(sel.get_support())
-            list_name_final = [x for x, y in zip(list_name_final, index) if y]
-            list_name_final= [x for x, y in zip(list_name_final, retain_index) if y]
-
-        else:
-            list_name_final =  []
-        return(hyperparams, ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind], list_name_final)
+        index = list(sel.get_support())
+        label_names = label_names[index][retain_index] # TODO: what is the difference between index and retain_index? len(index) > len(retain_index), so index apparently must be used as an index first
+        return(hyperparams, ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind], label_names)
 
     elif model_name == 'RF':
         if 'max_depth' not in kwargs:
@@ -658,7 +613,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         if 'select_value' not in kwargs:
             kwargs['select_value'] = 0.05
         if 'trans_type' not in kwargs:
-            kwargs['trans_type'] = 'auto'
+            kwargs['trans_type'] = 'all'
         if 'use_cross_entropy' not in kwargs:
             kwargs['use_cross_entropy'] = False
 
@@ -712,13 +667,10 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         hyperparams['lag'] = lag
         hyperparams['retain_index'] = retain_index
 
-        # Names for the retained variables(?)
-        if kwargs['label_name'] :
+        # Names for the retained variables
+        if kwargs['label_name']:
             if model_name == 'DALVEN': # DALVEN does transform first, then lag
-                if kwargs['trans_type'] == 'auto':
-                    Xt, _ = nr.feature_trans(X, degree = degree, interaction = 'later')
-                else:
-                    Xt, _ = nr.poly_feature(X, degree = degree, interaction = True, power = True)
+                Xt, _, label_names = rm._feature_trans(X, degree = degree, trans_type = kwargs['trans_type'])
 
                 # Lag padding for X
                 XD = Xt[lag:]
@@ -736,13 +688,11 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                 for i in range(lag):
                     XD = np.hstack((XD, y[lag-1-i : -i-1]))
 
-                if kwargs['trans_type'] == 'auto':
-                    XD, _ = nr.feature_trans(XD, degree = degree, interaction = 'later')
-                else:
-                    XD, _ = nr.poly_feature(XD, degree = degree, interaction = True, power = True)
+                XD, _, label_names = rm._feature_trans(XD, degree = degree, trans_type = kwargs['trans_type'])
 
             # Remove features with insignificant variance
             sel = VarianceThreshold(threshold=eps).fit(XD)
+            index = list(sel.get_support())
 
             if 'xticks' in kwargs:
                 list_name = kwargs['xticks']
@@ -750,7 +700,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                 list_name = [f'x{i}' for i in range(1, np.shape(X)[1]+1)]
 
             list_name_final = list_name[:] # [:] makes a copy
-            if kwargs['trans_type'] == 'auto':
+            if kwargs['trans_type'] == 'all':
                 list_name_final += [f'log({name})' for name in list_name] + [f'sqrt({name})' for name in list_name] + [f'1/{name}' for name in list_name]
 
                 if degree >= 2:
@@ -785,7 +735,6 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             for i in range(lag):
                 list_name_final += [f'y(t-{i+1})'] 
 
-            index = list(sel.get_support())
             list_name_final = [x for x, y in zip(list_name_final, index) if y]
             list_name_final = [x for x, y in zip(list_name_final, retain_index) if y]
 
