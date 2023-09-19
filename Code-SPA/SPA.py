@@ -492,6 +492,10 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
         raise UnboundLocalError(f'You input {model_name} for model_name, but that is not a valid name.')
 
     # Residual analysis + test for dynamics in the residual
+    if 'DALVEN' in selected_model: # The first "lag" entries are removed from yhat, so we need to remove them from X and y
+        lag = fitting_result[selected_model]['model_hyper']['lag']
+    else:
+        lag = 0
     if use_cross_entropy:
         for model in fitting_result.keys(): # Renaming "yhat" to "logits" for all models
             fitting_result[model]['logits_train'] = fitting_result[model].pop('yhat_train')
@@ -504,18 +508,14 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
         fitting_result[selected_model]['yhat_train_nontrans'] = scaler_y.inverse_transform(np.atleast_2d(fitting_result[selected_model]['yhat_train']))
         fitting_result[selected_model]['yhat_train_nontrans_mean'] = np.mean(fitting_result[selected_model]['yhat_train_nontrans'])
         fitting_result[selected_model]['yhat_train_nontrans_stdev'] = np.std(fitting_result[selected_model]['yhat_train_nontrans'])
-        fitting_result[selected_model]['MSE_train_nontrans'] = np.sum( (fitting_result[selected_model]['yhat_train_nontrans'] - y)**2 )/y.shape[0]
+        fitting_result[selected_model]['MSE_train_nontrans'] = np.mean( (fitting_result[selected_model]['yhat_train_nontrans'] - y[lag:])**2 )
         fitting_result[selected_model]['RMSE_train_nontrans'] = np.sqrt(fitting_result[selected_model]['MSE_train_nontrans'])
         fitting_result[selected_model]['yhat_test_nontrans'] = scaler_y.inverse_transform(np.atleast_2d(fitting_result[selected_model]['yhat_test']))
         fitting_result[selected_model]['yhat_test_nontrans_mean'] = np.mean(fitting_result[selected_model]['yhat_test_nontrans'])
         fitting_result[selected_model]['yhat_test_nontrans_stdev'] = np.std(fitting_result[selected_model]['yhat_test_nontrans'])
-        fitting_result[selected_model]['MSE_test_nontrans'] = np.sum( (fitting_result[selected_model]['yhat_test_nontrans'] - y_test)**2 )/y_test.shape[0]
+        fitting_result[selected_model]['MSE_test_nontrans'] = np.mean( (fitting_result[selected_model]['yhat_test_nontrans'] - y_test[lag:])**2 )
         fitting_result[selected_model]['RMSE_test_nontrans'] = np.sqrt(fitting_result[selected_model]['MSE_test_nontrans'])
     if len(y_test.squeeze()) >= 4 and not use_cross_entropy and selected_model != 'RNN': # TODO: residuals with small lengths lead to errors when plotting ACF. Need to figure out why
-        if 'DALVEN' in selected_model: # The first "lag" entries are removed from yhat, so we need to remove them from X and y
-            lag = fitting_result[selected_model]['model_hyper']['lag']
-        else:
-            lag = 0
         _, dynamic_test_result = residual_analysis(X_test[lag:], y_test[lag:], fitting_result[selected_model]['yhat_test_nontrans'], plot = plot_interrogation, alpha = alpha, round_number = selected_model)
         if dynamic_test_result and not(dynamic_model) and selected_model not in {'RNN', 'DALVEN', 'DALVEN_full_nonlinear', 'ADAPTx'}: # TODO: Get the names of the MATLAB models and add them here
             print('A residual analysis found dynamics in the system. Please run SPA again with dynamic_model = True')

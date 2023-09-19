@@ -14,19 +14,6 @@ import numpy.matlib as matlib
 import warnings
 warnings.filterwarnings("ignore") # TODO: Want to just ignore the PLS constant residual warnings, but this will do for now
 
-def model_getter(model_name):
-    '''Return the model according to the name'''
-    switcher = {
-            'OLS': OLS_fitting,
-            'SPLS': SPLS_fitting,
-            'EN': EN_fitting,
-            'LASSO': LASSO_fitting,
-            'ALVEN': ALVEN_fitting,
-            'RR': RR_fitting,
-            'DALVEN': DALVEN_fitting,
-            'DALVEN_full_nonlinear': DALVEN_fitting_full_nonlinear}
-    return switcher[model_name]
-
 def OLS_fitting(X, y, X_test, y_test):
     """
     Fits data using ordinary least squares: y = a*x1 + b*x2 + ...
@@ -204,7 +191,6 @@ def ALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, alpha_num =
     # Remove features with insignificant variance
     sel = VarianceThreshold(threshold = tol).fit(X)
     X = sel.transform(X)
-    print(f'The shape of X after sel is {X.shape}')
     X_test = sel.transform(X_test)
 
     # Scale data (based on z-score)
@@ -220,9 +206,9 @@ def ALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, alpha_num =
     # Eliminate features
     f_test, p_values = f_regression(X, y.flatten())
 
-    if selection == 'p_value':
+    if selection.casefold() == 'p_value':
         retain_index = p_values < select_value
-    elif selection == 'percentage':
+    elif selection.casefold() == 'percentage':
         number = int(np.ceil(select_value * X.shape[1]))
         f_test.sort()
         value = f_test[-number]
@@ -255,12 +241,12 @@ def ALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, alpha_num =
         ALVEN_params = None
         mse_train = np.var(y)
         mse_test = np.var(y_test)
-        yhat_train = np.zeros(y.shape)
+        yhat_train = np.zeros(y.shape) # TODO: if we're fitting the mean, this should not be zeros, but rather y - np.mean(y)
         yhat_test = np.zeros(y_test.shape)
         alpha = 0
     else:
         if alpha_num is not None and cv:
-            X_max = np.concatenate((X_fit,X_test_fit),axis = 0)
+            X_max = np.concatenate((X_fit,X_test_fit),axis = 0) # TODO: should we really include the test set here? This looks like test-set leakage
             y_max = np.concatenate((y, y_test), axis = 0)
             alpha_max = (np.sqrt(np.sum(np.dot(X_max.T,y_max) ** 2, axis=1)).max())/X_max.shape[0]/l1_ratio
             alpha_list = np.logspace(np.log10(alpha_max * tol), np.log10(alpha_max), alpha_num)[::-1]
@@ -318,7 +304,6 @@ def DALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree, lag, alpha_num
 
     # Feature transformation
     X, X_test, _ = _feature_trans(X, X_test, degree, trans_type = trans_type)
-
     # Lag padding for X
     XD = X[lag:]
     XD_test = X_test[lag:]
@@ -350,10 +335,9 @@ def DALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree, lag, alpha_num
 
     # Eliminate features
     f_test, p_values = f_regression(XD, y.flatten())
-
-    if selection == 'p_value':
+    if selection.casefold() == 'p_value':
         retain_index = p_values < select_value
-    elif selection == 'percentage':
+    elif selection.casefold() == 'percentage':
         number = int(np.ceil(select_value * XD.shape[1]))
         f_test.sort()
         value = f_test[-number]
@@ -487,9 +471,9 @@ def DALVEN_fitting_full_nonlinear(X, y, X_test, y_test, alpha, l1_ratio, degree,
     # Eliminate features
     f_test, p_values = f_regression(XD, y.flatten())
 
-    if selection == 'p_value':
+    if selection.casefold() == 'p_value':
         retain_index = p_values < select_value
-    elif selection == 'percentage':
+    elif selection.casefold() == 'percentage':
         number = int(np.ceil(select_value * XD.shape[1]))
         f_test.sort()
         value = f_test[-number]
@@ -604,7 +588,7 @@ def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type 
         if X_test is not None:
             X_test_out = X_test_out[:, ~interaction_column]
     # Including ln, sqrt, and inverse terms
-    if trans_type.casefold() == 'all': # TODO: the original SPA code had labels for transforms such as x^1.5 or 1/sqrt(x), but these were not implemented in the code. Should I do so?
+    if trans_type.casefold() == 'all':
         # ln transform
         Xlog_trans = poly.fit_transform(Xlog)[:, ~interaction_column] # Transforming and removing interactions, as we do not care about log-log interactions
         X_out = np.column_stack((X_out, Xlog_trans))
@@ -639,40 +623,31 @@ def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type 
             Xinv_test_trans = poly.fit_transform(Xinv_t)[:, ~interaction_column]
             X_test_out = np.column_stack((X_test_out, Xinv_test_trans))
         # Specific interactions between X, ln(X), sqrt(X), and 1/X that occur for degree >= 2
-        for power in range(1, degree):
-            power_name = f'^{power}' if power > 1 else '' # To avoid labeling things as x^1
-            normal_sqrt_interaction = X**power * Xsqrt
-            normal_sqrt_names = [f'x{number}{power_name}*sqrt(x{number})' for number in range(X.shape[1])]
-            sqrt_inv_interaction = Xsqrt * Xinv**power # Note that this is added later to X_out to respect the order in the original SPA code. No idea if there is some sort of meaning to the original order
-            sqrt_inv_names = [f'sqrt(x{number})*1/(x{number}{power_name})' for number in range(X.shape[1])]
-            log_inv_interaction = Xlog**power * Xinv
-            log_inv_names = [f'ln(x{number}){power_name}*1/(x{number})' for number in range(X.shape[1])]
-            if power == 1:
-                X_out = np.column_stack((X_out, normal_sqrt_interaction, log_inv_interaction, sqrt_inv_interaction))
-                label_names = np.concatenate((label_names, normal_sqrt_names, log_inv_names, sqrt_inv_names))
-            else: # Relevant only when power >= 2, and called separately to avoid two Xlog*Xinv
-                log_inv_interaction_two = Xlog * Xinv**power
-                log_inv_two_names = [f'ln(x{number})*1/(x{number}{power_name})' for number in range(X.shape[1])]
-                if power == 2: # Triple interaction TODO: degree >= 4 (power >= 3) would have powers of this triple interaction, but these powers have not been implemented in the original SPA, which limited degree to <= 3
-                    triple_interaction = Xlog * Xsqrt * Xinv
-                    triple_interaction_names = [f'ln(x{number})*sqrt({number})*1/(x{number})' for number in range(X.shape[1])]
-                    X_out = np.column_stack((X_out, normal_sqrt_interaction, log_inv_interaction, log_inv_interaction_two, sqrt_inv_interaction, triple_interaction))
-                    label_names = np.concatenate((label_names, normal_sqrt_names, log_inv_names, log_inv_two_names, sqrt_inv_names, triple_interaction_names))
-                else:
-                    X_out = np.column_stack((X_out, normal_sqrt_interaction, log_inv_interaction, log_inv_interaction_two, sqrt_inv_interaction))
-                    label_names = np.concatenate((label_names, normal_sqrt_names, log_inv_names, log_inv_two_names, sqrt_inv_names))
+        if degree >= 2:
+            normal_plus_half_interaction = np.column_stack([X**(pow1+0.5) for pow1 in range(1, degree)])
+            normal_plus_half_names = [f'x{number}^{pow1+0.5}' for pow1 in range(1, degree) for number in range(X.shape[1])]
+            log_inv_interaction = np.column_stack([Xlog**pow1 * Xinv**pow2 for pow1 in range(1,degree) for pow2 in range(1,degree) if pow1+pow2 <= degree])
+            log_inv_names = [f'ln(x{number})^{pow1}/(x{number})^{pow2}' for pow1 in range(1,degree) for pow2 in range(1,degree) if pow1+pow2 <= degree for number in range(X.shape[1])]
+            log_inv_names = [elem[:-2].replace('^1/', '/') + elem[-2:].replace('^1', '') for elem in log_inv_names] # Removing ^1. String addition to avoid removing ^10, ^11, ^12, ...
+            inv_minus_half_interaction = np.column_stack([Xinv**(pow1-0.5) for pow1 in range(1, degree)])
+            inv_minus_half_names = [f'1/(x{number}^{pow1-0.5})' for pow1 in range(1, degree) for number in range(X.shape[1])]
+            if degree == 2: # degree == 2 does not have the ln(x) * sqrt(x) / x type of interactions
+                X_out = np.column_stack((X_out, normal_plus_half_interaction, log_inv_interaction, inv_minus_half_interaction))
+                label_names = np.concatenate((label_names, normal_plus_half_names, log_inv_names, inv_minus_half_names))
+            else:
+                log_inv_minus_oneandhalf_interaction = np.column_stack([Xlog**pow1 * Xinv**(pow2-0.5) for pow1 in range(1,degree) for pow2 in range(1,degree) if pow1+pow2 <= degree-1])
+                log_inv_minus_oneandhalf_names = [f'ln(x{number})^{pow1}/(x{number}^{pow2-0.5})' for pow1 in range(1,degree) for pow2 in range(1,degree) if pow1+pow2 <= degree-1 for number in range(X.shape[1])]
+                log_inv_minus_oneandhalf_names = [elem[:-2].replace('^1/', '/') + elem[-2:].replace('^1', '') for elem in log_inv_minus_oneandhalf_names] # Removing ^1. String addition to avoid removing ^10, ^11, ^12, ...
+                X_out = np.column_stack((X_out, normal_plus_half_interaction, log_inv_interaction, inv_minus_half_interaction, log_inv_minus_oneandhalf_interaction))
+                label_names = np.concatenate((label_names, normal_plus_half_names, log_inv_names, inv_minus_half_names, log_inv_minus_oneandhalf_names))
             if X_test is not None:
-                normal_sqrt_interaction = X_test**power * Xsqrt_t
-                sqrt_inv_interaction = Xsqrt_t * Xinv_t**power # Note that this is added later to X_out to respect the order in the original SPA code. No idea if there is some sort of meaning to the original order
-                log_inv_interaction = Xlog_t**power * Xinv_t
-                if power == 1:
-                    X_test_out = np.column_stack((X_test_out, normal_sqrt_interaction, log_inv_interaction, sqrt_inv_interaction))
-                else: # Relevant only when power >= 2, and called separately to avoid two Xlog*Xinv
-                    log_inv_interaction_two = Xlog_t * Xinv_t**power
-                    if power == 2:
-                        triple_interaction = Xlog_t * Xsqrt_t * Xinv_t
-                        X_test_out = np.column_stack((X_test_out, normal_sqrt_interaction, log_inv_interaction, log_inv_interaction_two, sqrt_inv_interaction, triple_interaction))
-                    else:
-                        X_test_out = np.column_stack((X_test_out, normal_sqrt_interaction, log_inv_interaction, log_inv_interaction_two, sqrt_inv_interaction))
+                normal_plus_half_interaction = np.column_stack([X_test**(pow1+0.5) for pow1 in range(1, degree)])
+                log_inv_interaction = np.column_stack([Xlog_t**pow1 * Xinv_t**pow2 for pow1 in range(1,degree) for pow2 in range(1,degree) if pow1+pow2 <= degree])
+                inv_minus_half_interaction = np.column_stack([Xinv_t**(pow1-0.5) for pow1 in range(1, degree)])
+                if degree == 2:
+                    X_test_out = np.column_stack((X_test_out, normal_plus_half_interaction, log_inv_interaction, inv_minus_half_interaction))
+                else:
+                    log_inv_minus_oneandhalf_interaction = np.column_stack([Xlog_t**pow1 * Xinv_t**(pow2-0.5) for pow1 in range(1,degree) for pow2 in range(1,degree) if pow1+pow2 <= degree-1])
+                    X_test_out = np.column_stack((X_test_out, normal_plus_half_interaction, log_inv_interaction, inv_minus_half_interaction, log_inv_minus_oneandhalf_interaction))
 
     return (X_out, X_test_out, label_names)

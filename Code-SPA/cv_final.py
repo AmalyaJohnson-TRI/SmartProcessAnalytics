@@ -130,7 +130,6 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         kwargs['robust_priority'] = False
 
     if model_name == 'EN':
-        EN = rm.model_getter(model_name)
         if 'l1_ratio' not in kwargs:
             kwargs['l1_ratio'] = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99][::-1]
         if 'use_cross_entropy' not in kwargs:
@@ -163,7 +162,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                     alpha_max = (np.sqrt(np.sum(np.dot(X.T,y) ** 2, axis=1)).max())/X.shape[0]/kwargs['l1_ratio'][j]
                     kwargs['alpha'] = np.logspace(np.log10(alpha_max * eps), np.log10(alpha_max), alpha_num)[::-1]
                     for i in range(alpha_num):
-                        _, variable, _, mse, _, _ = EN(X_train_scale, y_train_scale, X_val_scale, y_val_scale, kwargs['alpha'][i], kwargs['l1_ratio'][j], use_cross_entropy = kwargs['use_cross_entropy'])
+                        _, variable, _, mse, _, _ = rm.EN_fitting(X_train_scale, y_train_scale, X_val_scale, y_val_scale, kwargs['alpha'][i], kwargs['l1_ratio'][j], use_cross_entropy = kwargs['use_cross_entropy'])
                         MSE_result[i, j, counter] = mse
                         if kwargs['robust_priority']:
                             Var[i, j, counter] = np.sum(variable.flatten() != 0)
@@ -201,7 +200,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             mse_train = MSE(yhat_train.flatten(), y.flatten())
             mse_test = MSE(yhat_test.flatten(), y_test.flatten())
         else:
-            EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test = EN(X, y, X_test, y_test, alpha = alpha, l1_ratio = l1_ratio)
+            EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test = rm.EN_fitting(X, y, X_test, y_test, alpha = alpha, l1_ratio = l1_ratio)
         return(hyperparams, EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name == 'SPLS':
@@ -257,8 +256,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         SPLS_model, SPLS_params, mse_train, mse_test, yhat_train, yhat_test = SPLS(X, y, X_test, y_test, eta = eta, K = K)
         return(hyperparams, SPLS_model, SPLS_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
-    elif model_name == 'LASSO': # TODO: add onestd?
-        LASSO = rm.model_getter(model_name)
+    elif model_name == 'LASSO': # TODO: add onestd? # TODO: LASSO can't even be called from SPA()
         if 'alpha' not in kwargs:
             alpha_max = (np.sqrt(np.sum(np.dot(X.T,y) ** 2, axis=1)).max())/X.shape[0]
             kwargs['alpha'] = np.logspace(np.log10(alpha_max * eps), np.log10(alpha_max), alpha_num)[::-1]
@@ -267,7 +265,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
 
         for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
             for i in range(len(kwargs['alpha'])):
-                _, _, _, mse, _, _ = LASSO(X_train, y_train, X_val, y_val, alpha = kwargs['alpha'][i])
+                _, _, _, mse, _, _ = rm.LASSO_fitting(X_train, y_train, X_val, y_val, alpha = kwargs['alpha'][i])
                 MSE_result[i, counter] = mse
 
         MSE_mean = np.nanmean(MSE_result, axis = 1)
@@ -287,25 +285,24 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         hyperparams['alpha'] = alpha
 
         # Fit the final model
-        LASSO_model, LASSO_params, mse_train, mse_test, yhat_train, yhat_test = LASSO(X, y, X_test, y_test, alpha = alpha)
+        LASSO_model, LASSO_params, mse_train, mse_test, yhat_train, yhat_test = rm.LASSO_fitting(X, y, X_test, y_test, alpha = alpha)
         return(hyperparams, LASSO_model, LASSO_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
-    elif model_name == 'POLY': # TODO: add onestd?
-        OLS = rm.model_getter('OLS')
+    elif model_name == 'POLY': # TODO: add onestd? # TODO: POLY can't even be called from SPA()
         if 'degree' not in kwargs:
             kwargs['degree'] = [2,3,4]
         if 'interaction' not in kwargs:
             kwargs['interaction'] = True
-        if 'power' not in kwargs:
-            kwargs['power'] = True
+        if 'trans_type' not in kwargs:
+            kwargs['trans_type'] = 'poly'
 
         MSE_result = np.empty((len(kwargs['degree']), K_fold*Nr)) * np.nan
 
         for d in range(len(kwargs['degree'])):
-            X_trans, _ = nr.poly_feature(X, X_test, degree = kwargs['degree'][d], interaction = kwargs['interaction'], power = kwargs['power'])
+            X_trans, _ = rm._feature_trans(X, X_test, kwargs['degree'][d], kwargs['interaction'], kwargs['trans_type'])
             X_trans = np.hstack((np.ones([X_trans.shape[0], 1]), X_trans))
             for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_trans, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
-                _, _, _, mse, _, _ = OLS(X_train, y_train, X_val, y_val)
+                _, _, _, mse, _, _ = rm.OLS_fitting(X_train, y_train, X_val, y_val)
                 MSE_result[d, counter] = mse
 
         MSE_mean = np.nanmean(MSE_result, axis = 1)
@@ -325,11 +322,11 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         hyperparams['degree'] = int(degree)
 
         # Fit the final model
-        X_trans, X_trans_test = nr.poly_feature(X, X_test, degree = degree, interaction = kwargs['interaction'], power = kwargs['power'])
+        X_trans, X_trans_test = rm._feature_trans(X, X_test, degree, kwargs['interaction'], kwargs['trans_type'])
         X_trans = np.hstack((np.ones([X_trans.shape[0], 1]), X_trans))
         X_trans_test = np.hstack((np.ones([X_trans_test.shape[0], 1]), X_trans_test))
 
-        POLY_model, POLY_params, mse_train, mse_test, yhat_train, yhat_test = OLS(X_trans, y, X_trans_test, y_test)
+        POLY_model, POLY_params, mse_train, mse_test, yhat_train, yhat_test = rm.OLS_fitting(X_trans, y, X_trans_test, y_test)
         return(hyperparams, POLY_model, POLY_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name == 'PLS':
@@ -451,7 +448,6 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                 temp = PAR(delayed(_ALVEN_joblib_fun)(X_train, y_train, X_val, y_val, eps, alpha_num, kwargs, counter,
                         prod_idx, this_prod) for prod_idx, this_prod in enumerate(hyperparam_prod))
                 MSE_result[:, counter], Var[:, counter] = zip(*temp)
-        print('')
 
         MSE_mean = np.nanmean(MSE_result, axis = 1)
         ind = np.nanargmin(MSE_mean)
@@ -467,21 +463,16 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         degree = hyperparam_prod[ind][0]
         l1_ratio = hyperparam_prod[ind][1]
         alpha = hyperparam_prod[ind][2]
-
+        # Final run with the test set and best hyperparameters
         ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index = rm.ALVEN_fitting(X, y, X_test, y_test, alpha,
                                                 l1_ratio, degree, alpha_num, tol = eps, cv = False, selection = kwargs['selection'],
                                                 select_value = kwargs['select_value'], trans_type = kwargs['trans_type'])
-        hyperparams = {}
-        hyperparams['alpha'] = alpha
-        hyperparams['l1_ratio'] = l1_ratio
-        hyperparams['degree'] = degree
-        hyperparams['retain_index'] = retain_index
-
+        hyperparams = {'alpha': alpha, 'l1_ratio': l1_ratio, 'degree': degree, 'retain_index': retain_index}
         # Names for the retained variables
         Xtrans, _, label_names = rm._feature_trans(X, degree = degree, trans_type = kwargs['trans_type'])
-        sel = VarianceThreshold(threshold=eps).fit(Xtrans)
+        sel = VarianceThreshold(threshold=eps).fit(Xtrans) # Features that are removed because they have insignificant variance
         index = list(sel.get_support())
-        label_names = label_names[index][retain_index] # TODO: what is the difference between index and retain_index? len(index) > len(retain_index), so index apparently must be used as an index first
+        label_names = label_names[index][retain_index]
         return(hyperparams, ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind], label_names)
 
     elif model_name == 'RF':
@@ -598,7 +589,10 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         return(hyperparams, SVR_model, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name == 'DALVEN' or model_name == 'DALVEN_full_nonlinear':
-        DALVEN = rm.model_getter(model_name)
+        if model_name == 'DALVEN':
+            DALVEN = rm.DALVEN_fitting
+        else:
+            DALVEN = rm.DALVEN_fitting_full_nonlinear
         kwargs['model_name'] = model_name
         if 'l1_ratio' not in kwargs:
             kwargs['l1_ratio'] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99][::-1]
@@ -656,95 +650,44 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         l1_ratio = hyperparam_prod[ind][1]
         alpha = hyperparam_prod[ind][2]
         lag = hyperparam_prod[ind][3]
-
+        # Final run with the test set and best hyperparameters
         DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index, _ = DALVEN(X, y, X_test, y_test, alpha,
                                                     l1_ratio, degree, lag, alpha_num, tol = eps, cv = False, selection = kwargs['selection'],
                                                     select_value = kwargs['select_value'], trans_type = kwargs['trans_type'])
-        hyperparams = {}
-        hyperparams['alpha'] = alpha
-        hyperparams['l1_ratio'] = l1_ratio
-        hyperparams['degree'] = degree
-        hyperparams['lag'] = lag
-        hyperparams['retain_index'] = retain_index
-
+        hyperparams = {'alpha': alpha, 'l1_ratio': l1_ratio, 'degree': degree, 'lag': lag, 'retain_index': retain_index}
         # Names for the retained variables
-        if kwargs['label_name']:
-            if model_name == 'DALVEN': # DALVEN does transform first, then lag
-                Xt, _, label_names = rm._feature_trans(X, degree = degree, trans_type = kwargs['trans_type'])
-
-                # Lag padding for X
-                XD = Xt[lag:]
-                for i in range(lag):
-                    XD = np.hstack((XD, Xt[lag-1-i : -i-1]))
-                # Lag padding for y in design matrix
-                for i in range(lag):
-                    XD = np.hstack((XD, y[lag-1-i : -i-1]))
-            else: # DALVEN_full_nonlinear does lag first, then transform
-                # Lag padding for X
-                XD = X[lag:]
-                for i in range(lag):
-                    XD = np.hstack((XD, X[lag-1-i : -i-1]))
-                # Lag padding for y in design matrix
-                for i in range(lag):
-                    XD = np.hstack((XD, y[lag-1-i : -i-1]))
-
-                XD, _, label_names = rm._feature_trans(XD, degree = degree, trans_type = kwargs['trans_type'])
-
-            # Remove features with insignificant variance
-            sel = VarianceThreshold(threshold=eps).fit(XD)
-            index = list(sel.get_support())
-
-            if 'xticks' in kwargs:
-                list_name = kwargs['xticks']
-            else:
-                list_name = [f'x{i}' for i in range(1, np.shape(X)[1]+1)]
-
-            list_name_final = list_name[:] # [:] makes a copy
-            if kwargs['trans_type'] == 'all':
-                list_name_final += [f'log({name})' for name in list_name] + [f'sqrt({name})' for name in list_name] + [f'1/{name}' for name in list_name]
-
-                if degree >= 2:
-                    for i in range(X.shape[1]-1):
-                        for j in range(i+1, X.shape[1]):
-                            list_name_final += [f'{list_name[i]}*{list_name[j]}']
-                    list_name_final += [f'{name}^2' for name in list_name] + [f'(log{name})^2' for name in list_name] + [f'1/{name}^2' for name in list_name] + (
-                            [f'{name}^1.5' for name in list_name] + [f'log({name})/{name}' for name in list_name]+ [f'1/{name}^0.5' for name in list_name] )
-
-                if degree >= 3:
-                    for i in range(X.shape[1]-2):
-                        for j in range(i+1, X.shape[1]-1):
-                            for k in range(j+1, X.shape[1]):
-                                list_name_final += [f'{list_name[i]}*{list_name[j]}*{list_name[k]}']
-                    list_name_final += [f'{name}^3' for name in list_name] + [f'(log{name})^3' for name in list_name] + [f'1/{name}^3' for name in list_name] + (
-                                [f'{name}^2.5' for name in list_name] + [f'(log{name})^2/{name}' for name in list_name]+ [f'log({name})/sqrt({name})' for name in list_name] +
-                                [f'log({name})/{name}^2' for name in list_name] + [f'{name}^-1.5' for name in list_name] )
-
-            elif degree >= 2:
-                for i in range(X.shape[1]):
-                    for j in range(i, X.shape[1]):
-                        list_name_final += [f'{list_name[i]}*{list_name[j]}']
-                if degree >= 3:
-                    for i in range(X.shape[1]):
-                        for j in range(i, X.shape[1]):
-                            for k in range(j, X.shape[1]):
-                                list_name_final += [f'{list_name[i]}*{list_name[j]}*{list_name[k]}']
-
-            list_copy = list_name_final[:]
+        if model_name == 'DALVEN': # DALVEN does transform first, then lag
+            Xt, _, label_names = rm._feature_trans(X, degree = degree, trans_type = kwargs['trans_type'])
+            # Lag padding for X
+            XD = Xt[lag:]
             for i in range(lag):
-                list_name_final += [f'{s}(t-{i+1})' for s in list_copy]
+                XD = np.hstack((XD, Xt[lag-1-i : -i-1]))
+            # Lag padding for y in design matrix
             for i in range(lag):
-                list_name_final += [f'y(t-{i+1})'] 
+                XD = np.hstack((XD, y[lag-1-i : -i-1]))
+        else: # DALVEN_full_nonlinear does lag first, then transform
+            # Lag padding for X
+            XD = X[lag:]
+            for i in range(lag):
+                XD = np.hstack((XD, X[lag-1-i : -i-1]))
+            # Lag padding for y in design matrix
+            for i in range(lag):
+                XD = np.hstack((XD, y[lag-1-i : -i-1]))
+            XD, _, label_names = rm._feature_trans(XD, degree = degree, trans_type = kwargs['trans_type'])
 
-            list_name_final = [x for x, y in zip(list_name_final, index) if y]
-            list_name_final = [x for x, y in zip(list_name_final, retain_index) if y]
-
-        else:
-            list_name_final =  []
+        # Remove features with insignificant variance
+        sel = VarianceThreshold(threshold=eps).fit(XD)
+        index = list(sel.get_support())
+        label_names = np.matlib.repmat(label_names, 1, lag+1).squeeze()
+        for idx in range(1, lag+1):
+            label_names[Xt.shape[1]*idx : Xt.shape[1]*(idx+1)] += f'(t-{idx})'
+        label_names = np.concatenate(( label_names, [f'y(t-{idx})' for idx in range(1, lag+1)] ))
+        label_names = label_names[index][retain_index]
 
         if 'IC' in cv_type:
-            return(hyperparams, DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, IC_result[ind], list_name_final)
+            return(hyperparams, DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, IC_result[ind], label_names)
         else:
-            return(hyperparams, DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind], list_name_final)
+            return(hyperparams, DALVEN_model, DALVEN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind], label_names)
 
     elif model_name in {'MLP', 'RNN'}:
         # Loss function
@@ -1031,7 +974,8 @@ def _ALVEN_joblib_fun(X_train, y_train, X_val, y_val, eps, alpha_num, kwargs, co
     """
     A helper function to parallelize ALVEN. Shouldn't be called by the user
     """
-    print(f'Beginning run {prod_idx+1:3} of fold {counter+1:3}', end = '\r')
+    if prod_idx == 0 or not (prod_idx+1)%200:
+        print(f'Beginning run {prod_idx+1:4} of fold {counter+1:3}', end = '\r')
     _, variable, _, mse, _, _ , _, _ = rm.ALVEN_fitting(X_train, y_train, X_val, y_val, alpha = this_prod[2], l1_ratio = this_prod[1],
                                 degree = this_prod[0], tol = eps , alpha_num = alpha_num, cv = True, selection = kwargs['selection'],
                                 select_value = kwargs['select_value'], trans_type = kwargs['trans_type'], use_cross_entropy = kwargs['use_cross_entropy'])
@@ -1042,7 +986,8 @@ def _DALVEN_joblib_fun(X_train, y_train, X_val, y_val, eps, alpha_num, kwargs, p
     """
     A helper function to parallelize DALVEN. Shouldn't be called by the user
     """
-    print(f'Beginning run {prod_idx+1:3} of fold {counter+1:3}', end = '\r')
+    if prod_idx == 0 or not (prod_idx+1)%200:
+        print(f'Beginning run {prod_idx+1:4} of fold {counter+1:3}', end = '\r')
     if kwargs['model_name'] == 'DALVEN':
         _, variable, _, mse, _, _ , _, _, ICs = rm.DALVEN_fitting(X_train, y_train, X_val, y_val, alpha = this_prod[2], l1_ratio = this_prod[1],
                                     degree = this_prod[0], lag = this_prod[3], tol = eps , alpha_num = alpha_num, cv = True, selection = kwargs['selection'],
