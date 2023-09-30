@@ -96,7 +96,7 @@ def CVpartition(X, y, Type = 'Re_KFold', K = 5, Nr = 10, random_state = 0, group
     else:
         raise ValueError(f'{Type} is not a valid CV type.')
 
-def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = None, cv_type = 'Re_KFold', K_fold = 5, Nr = 10, eps = 1e-4, alpha_num = 20, group = None, **kwargs):
+def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = None, cv_type = 'Re_KFold', K_fold = 5, Nr = 10, eps = 1e-4, group = None, **kwargs):
     """
     Determines the best hyperparameters using MSE based on information criteria.
     Also returns MSE and yhat data for the chosen model.
@@ -120,24 +120,26 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         Number of CV repetitions used when cv_type in {'MC', 'Re_KFold', 'GroupShuffleSplit'}.
     eps : float, optional, default = 1e-4
         Tolerance. TODO: expand on this.
-    alpha_num : int, optional, default = 20
-        Penalty weight used when model_name in {'RR', 'EN', 'ALVEN', 'DALVEN', 'DALVEN_full_nonlinear'}.
     **kwargs : dict, optional
         Non-default hyperparameters for model fitting.
     """
-
+    # Setting up some general kwargs
     if 'robust_priority' not in kwargs: # This should not be the case unless the user called this function manually, which is not recommended
         kwargs['robust_priority'] = False
+    if 'l1_ratio' not in kwargs:
+        kwargs['l1_ratio'] = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99][::-1]
+    if 'alpha' not in kwargs: # Unusual scenario, since SPA passes a default kwargs['alpha'] == 20
+        kwargs['alpha'] = np.concatenate(([0], np.logspace(-4.3, 0, 20)))
+        print('a'*50)
+    elif isinstance(kwargs['alpha'], int): # User passed an integer instead of a list of values
+        kwargs['alpha'] = np.concatenate(([0], np.logspace(-4.3, 0, kwargs['alpha'])))
+    if 'use_cross_entropy' not in kwargs:
+        kwargs['use_cross_entropy'] = False
 
     if model_name == 'EN':
-        if 'l1_ratio' not in kwargs:
-            kwargs['l1_ratio'] = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99][::-1]
-        if 'use_cross_entropy' not in kwargs:
-            kwargs['use_cross_entropy'] = False
-
-        MSE_result = np.empty((alpha_num, len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan
+        MSE_result = np.empty((len(kwargs['alpha']), len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan
         if kwargs['robust_priority']:
-            Var = np.empty((alpha_num, len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan
+            Var = np.empty((len(kwargs['alpha']), len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan
 
         for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
             # Rescaling to avoid validation dataset leakage
@@ -150,22 +152,11 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             y_train_scale = scaler_y_train.transform(y_train)
             y_val_scale = scaler_y_train.transform(y_val)
             for j in range(len(kwargs['l1_ratio'])):
-                if kwargs['l1_ratio'][j] == 0:
-                    alpha_max = (np.sqrt(np.sum(np.dot(X.T,y) ** 2, axis=1)).max())/X.shape[0]/0.0001
-                    kwargs['alpha'] = np.logspace(np.log10(alpha_max * eps/100), np.log10(alpha_max), alpha_num)[::-1]
-                    for i in range(alpha_num):
-                        clf = Ridge(alpha=kwargs['alpha'][i],fit_intercept=False).fit(X_train_scale, y_train_scale)
-                        MSE_result[i, j, counter] = np.sum((clf.predict(X_val_scale)-y_val_scale)**2)/y_val.shape[0]
-                        if kwargs['robust_priority']:
-                            Var[i, j, counter] = np.sum(clf.coef_.flatten() != 0)
-                else:
-                    alpha_max = (np.sqrt(np.sum(np.dot(X.T,y) ** 2, axis=1)).max())/X.shape[0]/kwargs['l1_ratio'][j]
-                    kwargs['alpha'] = np.logspace(np.log10(alpha_max * eps), np.log10(alpha_max), alpha_num)[::-1]
-                    for i in range(alpha_num):
-                        _, variable, _, mse, _, _ = rm.EN_fitting(X_train_scale, y_train_scale, X_val_scale, y_val_scale, kwargs['alpha'][i], kwargs['l1_ratio'][j], use_cross_entropy = kwargs['use_cross_entropy'])
-                        MSE_result[i, j, counter] = mse
-                        if kwargs['robust_priority']:
-                            Var[i, j, counter] = np.sum(variable.flatten() != 0)
+                for i in range(len(kwargs['alpha'])):
+                    _, variable, _, mse, _, _ = rm.EN_fitting(X_train_scale, y_train_scale, X_val_scale, y_val_scale, kwargs['alpha'][i], kwargs['l1_ratio'][j])
+                    MSE_result[i, j, counter] = mse
+                    if kwargs['robust_priority']:
+                        Var[i, j, counter] = np.sum(variable.flatten() != 0)
 
         MSE_mean = np.nanmean(MSE_result, axis = 2)
         # Min MSE value (first occurrence)
@@ -179,37 +170,21 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             ind = (ind[0][0], ind[1][0])
 
         # Hyperparameter setup
-        l1_ratio = kwargs['l1_ratio'][ind[1]]
-        if l1_ratio != 0:
-            alpha_max = (np.sqrt(np.sum(np.dot(X.T,y) ** 2, axis=1)).max())/X.shape[0]/l1_ratio
-            kwargs['alpha'] = np.logspace(np.log10(alpha_max * eps), np.log10(alpha_max), alpha_num)[::-1]
-        else:
-            alpha_max = (np.sqrt(np.sum(np.dot(X.T,y) ** 2, axis=1)).max())/X.shape[0]/0.0001
-            kwargs['alpha'] = np.logspace(np.log10(alpha_max * eps/100), np.log10(alpha_max), alpha_num)[::-1]
         alpha = kwargs['alpha'][ind[0]]
-        hyperparams = {}
-        hyperparams['alpha'] = alpha
-        hyperparams['l1_ratio'] = l1_ratio
-
+        l1_ratio = kwargs['l1_ratio'][ind[1]]
+        hyperparams = {'alpha': alpha, 'l1_ratio': l1_ratio}
         # Fit the final model
-        if l1_ratio == 0:
-            EN_model = Ridge(alpha = alpha, fit_intercept = False).fit(X, y)
-            EN_params = EN_model.coef_.reshape(-1,1)
-            yhat_train = EN_model.predict(X)
-            yhat_test = EN_model.predict(X_test)
-            mse_train = MSE(yhat_train.flatten(), y.flatten())
-            mse_test = MSE(yhat_test.flatten(), y_test.flatten())
-        else:
-            EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test = rm.EN_fitting(X, y, X_test, y_test, alpha = alpha, l1_ratio = l1_ratio)
+        if alpha:
+            EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test = rm.EN_fitting(X, y, X_test, y_test, alpha, l1_ratio)
+        else: # Alpha = 0 --> use ordinary least squares
+            EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test = rm.OLS_fitting(X, y, X_test, y_test)
         return(hyperparams, EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name == 'SPLS':
-        SPLS = rm.SPLS_fitting
         if not(cv_type.startswith('Group')) and 'K' not in kwargs: # For non-grouped CV types
             kwargs['K'] = np.linspace( 1, min(X.shape[1], int((K_fold-1)/K_fold * X.shape[0] - 1)), min(X.shape[1], int((K_fold-1)/K_fold * X.shape[0] - 1)), dtype = np.uint64)
         elif 'K' not in kwargs:
             kwargs['K'] = np.linspace(1, min(X.shape[1], X.shape[0]-1), min(X.shape[1], X.shape[0]-1), dtype = np.uint64)
-
         if 'eta' not in kwargs:
             kwargs['eta'] = np.linspace(0, 1, 20, endpoint = False)[::-1] #eta = 0 -> use normal PLS
 
@@ -229,7 +204,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             y_val_scale = scaler_y_train.transform(y_val)
             for i in range(len(kwargs['K'])):
                 for j in range(len(kwargs['eta'])):
-                    _, variable, _, mse, _, _ = SPLS(X_train_scale, y_train_scale, X_val_scale, y_val_scale, K = int(kwargs['K'][i]), eta = kwargs['eta'][j])
+                    _, variable, _, mse, _, _ = rm.SPLS_fitting(X_train_scale, y_train_scale, X_val_scale, y_val_scale, K = int(kwargs['K'][i]), eta = kwargs['eta'][j])
                     MSE_result[i, j, counter] = mse
                     if kwargs['robust_priority']:
                         Var[i, j, counter] = np.sum(variable.flatten() != 0)
@@ -248,45 +223,10 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         # Hyperparameter setup
         K = int(kwargs['K'][ind[0]])
         eta = kwargs['eta'][ind[1]]
-        hyperparams = {}
-        hyperparams['K'] = int(K)
-        hyperparams['eta'] = eta
-
+        hyperparams = {'K': int(K), 'eta': eta}
         # Fit the final model
-        SPLS_model, SPLS_params, mse_train, mse_test, yhat_train, yhat_test = SPLS(X, y, X_test, y_test, eta = eta, K = K)
+        SPLS_model, SPLS_params, mse_train, mse_test, yhat_train, yhat_test = rm.SPLS_fitting(X, y, X_test, y_test, eta = eta, K = K)
         return(hyperparams, SPLS_model, SPLS_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
-
-    elif model_name == 'LASSO': # TODO: add onestd? # TODO: LASSO can't even be called from SPA()
-        if 'alpha' not in kwargs:
-            alpha_max = (np.sqrt(np.sum(np.dot(X.T,y) ** 2, axis=1)).max())/X.shape[0]
-            kwargs['alpha'] = np.logspace(np.log10(alpha_max * eps), np.log10(alpha_max), alpha_num)[::-1]
-
-        MSE_result = np.empty((len(kwargs['alpha']), K_fold*Nr)) * np.nan
-
-        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
-            for i in range(len(kwargs['alpha'])):
-                _, _, _, mse, _, _ = rm.LASSO_fitting(X_train, y_train, X_val, y_val, alpha = kwargs['alpha'][i])
-                MSE_result[i, counter] = mse
-
-        MSE_mean = np.nanmean(MSE_result, axis = 1)
-        # Min MSE value (first occurrence)
-        ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
-        """if kwargs['robust_priority']:
-            MSE_std = np.nanstd(MSE_result, axis = 1)
-            MSE_min = MSE_mean[ind]
-            MSE_bar = MSE_min + MSE_std[ind]
-            Var_num = np.nansum(Var, axis = 1)
-            ind = np.nonzero( Var_num == np.nanmin(Var_num[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
-            ind = (ind[0][0], ind[1][0])"""
-
-        # Hyperparameter setup
-        alpha = kwargs['alpha'][ind]
-        hyperparams = {}
-        hyperparams['alpha'] = alpha
-
-        # Fit the final model
-        LASSO_model, LASSO_params, mse_train, mse_test, yhat_train, yhat_test = rm.LASSO_fitting(X, y, X_test, y_test, alpha = alpha)
-        return(hyperparams, LASSO_model, LASSO_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name == 'POLY': # TODO: add onestd? # TODO: POLY can't even be called from SPA()
         if 'degree' not in kwargs:
@@ -364,11 +304,11 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             ind = ind[0][0]
 
         # Hyperparameter setup
-        hyperparams = {}
-        hyperparams['K'] = kwargs['K'][ind]
+        K = int(kwargs['K'][ind])
+        hyperparams = {'K': K}
 
         # Fit the final model
-        PLS_model = PLSRegression(scale = False, n_components = int(hyperparams['K'])).fit(X, y)
+        PLS_model = PLSRegression(scale = False, n_components = K).fit(X, y)
         PLS_params = PLS_model.coef_.reshape(-1,1)
         yhat_train = np.dot(X, PLS_params)
         yhat_test = np.dot(X_test, PLS_params)
@@ -377,10 +317,6 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         return(hyperparams, PLS_model, PLS_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name == 'RR':
-        if 'alpha' not in kwargs:
-            alpha_max = (np.sqrt(np.sum(np.dot(X.T,y) ** 2, axis=1)).max())/X.shape[0]/0.0001
-            kwargs['alpha'] = np.logspace(np.log10(alpha_max * eps/100), np.log10(alpha_max), alpha_num)[::-1]
-
         MSE_result = np.empty((len(kwargs['alpha']), K_fold*Nr)) * np.nan
 
         for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
@@ -410,11 +346,11 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             ind = ind[0][0]
 
         # Hyperparameter setup
-        hyperparams = {}
-        hyperparams['alpha'] = kwargs['alpha'][ind]
+        alpha = kwargs['alpha'][ind]
+        hyperparams = {'alpha': alpha}
 
         # Fit the final model
-        RR_model = Ridge(alpha = hyperparams['alpha'], fit_intercept = False).fit(X, y)
+        RR_model = Ridge(alpha = alpha, fit_intercept = False).fit(X, y)
         RR_params = RR_model.coef_.reshape(-1,1)
         yhat_train = np.dot(X, RR_params)
         yhat_test = np.dot(X_test, RR_params)
@@ -423,29 +359,42 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         return(hyperparams, RR_model, RR_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name == 'ALVEN':
-        if 'l1_ratio' not in kwargs:
-            kwargs['l1_ratio'] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99][::-1]
         if 'degree' not in kwargs:
             kwargs['degree'] = [1, 2, 3]
         if 'label_name' not in kwargs: # Whether to auto-generate label names for the variables [x1, x2, ..., log(x1), ..., 1/x1, ..., x1*x2, etc.]
-            kwargs['label_name'] = True
-        if 'selection' not in kwargs:
-            kwargs['selection'] = 'p_value'
-        if 'select_value' not in kwargs:
-            kwargs['select_value'] = 0.10
+            kwargs['label_name'] = True # TODO: currently unused. Not sure whether I'll re-implement custom naming
         if 'trans_type' not in kwargs:
             kwargs['trans_type'] = 'all'
-        if 'use_cross_entropy' not in kwargs:
-            kwargs['use_cross_entropy'] = False
+        if 'lag' not in kwargs and 'DALVEN' in model_name:
+            kwargs['lag'] =  [i+1 for i in range(40)]
+        elif model_name == 'ALVEN':
+            kwargs['lag'] = [0]
 
-        MSE_result = np.empty((len(kwargs['degree']) * alpha_num * len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan
-        Var = np.empty((len(kwargs['degree']) * alpha_num * len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan # Used when robust_priority == True
-        hyperparam_prod = list(product(kwargs['degree'], kwargs['l1_ratio'], range(alpha_num)))
-        print(f'There are {len(hyperparam_prod)} hyperparameter combinations')
-
+        # First run for variable selection using a L1_ratio of 1 (that is, only using an L1 penalty)
+        kwargs['selection'] = None
+        MSE_result = np.empty((len(kwargs['degree']) * len(kwargs['alpha']), K_fold*Nr)) * np.nan
+        hyperparam_prod = list(product(kwargs['degree'], [1], kwargs['alpha']))
+        print(f'Beginning variable selection runs. There are {len(hyperparam_prod)} hyperparameter combinations')
         with Parallel(n_jobs = -1) as PAR:
             for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
-                temp = PAR(delayed(_ALVEN_joblib_fun)(X_train, y_train, X_val, y_val, eps, alpha_num, kwargs, counter,
+                temp = PAR(delayed(_ALVEN_joblib_fun)(X_train, y_train, X_val, y_val, eps, kwargs, counter,
+                        prod_idx, this_prod) for prod_idx, this_prod in enumerate(hyperparam_prod))
+                MSE_result[:, counter], _ = zip(*temp)
+        MSE_mean = np.nanmean(MSE_result, axis = 1)
+        ind = np.nanargmin(MSE_mean)
+        # Run to obtain the coefficients when ALVEN is run with L1_ratio = 1
+        _, ALVEN_params, _, _, _, _, label_names = rm.ALVEN_fitting(X, y, X_test, y_test, hyperparam_prod[ind][2], 1, hyperparam_prod[ind][0], tol = eps,
+                                                selection = None, trans_type = kwargs['trans_type'])
+        kwargs['selection'] = np.abs(ALVEN_params.flatten()) >= 1e-3#3e-4 # TODO: This value could (should?) depend on the "eps" parameter, but I need to learn more about how it works in other models
+        kwargs['degree'] = [hyperparam_prod[ind][0]]
+
+        MSE_result = np.empty((len(kwargs['alpha']) * len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan
+        Var = np.empty((len(kwargs['alpha']) * len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan # Used when robust_priority == True
+        hyperparam_prod = list(product(kwargs['degree'], kwargs['l1_ratio'], kwargs['alpha']))
+        print(f'Beginning real runs. There are {len(hyperparam_prod)} hyperparameter combinations')
+        with Parallel(n_jobs = -1) as PAR:
+            for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+                temp = PAR(delayed(_ALVEN_joblib_fun)(X_train, y_train, X_val, y_val, eps, kwargs, counter,
                         prod_idx, this_prod) for prod_idx, this_prod in enumerate(hyperparam_prod))
                 MSE_result[:, counter], Var[:, counter] = zip(*temp)
 
@@ -463,17 +412,20 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         degree = hyperparam_prod[ind][0]
         l1_ratio = hyperparam_prod[ind][1]
         alpha = hyperparam_prod[ind][2]
+        hyperparams = {'alpha': alpha, 'l1_ratio': l1_ratio, 'degree': degree}
         # Final run with the test set and best hyperparameters
-        ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index = rm.ALVEN_fitting(X, y, X_test, y_test, alpha,
-                                                l1_ratio, degree, alpha_num, tol = eps, cv = False, selection = kwargs['selection'],
-                                                select_value = kwargs['select_value'], trans_type = kwargs['trans_type'])
-        hyperparams = {'alpha': alpha, 'l1_ratio': l1_ratio, 'degree': degree, 'retain_index': retain_index}
-        # Names for the retained variables
-        Xtrans, _, label_names = rm._feature_trans(X, degree = degree, trans_type = kwargs['trans_type'])
-        sel = VarianceThreshold(threshold=eps).fit(Xtrans) # Features that are removed because they have insignificant variance
-        index = list(sel.get_support())
-        label_names = label_names[index][retain_index]
-        return(hyperparams, ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind], label_names)
+        ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, label_names = rm.ALVEN_fitting(X, y, X_test, y_test, alpha,
+                                                l1_ratio, degree, tol = eps, selection = kwargs['selection'], trans_type = kwargs['trans_type'])
+        # Unscaling the model coefficients as per stackoverflow.com/questions/23642111/how-to-unscale-the-coefficients-from-an-lmer-model-fitted-with-a-scaled-respon
+        Xtrans, _, _ = rm._feature_trans(X, degree = degree, trans_type = kwargs['trans_type'])
+        ALVEN_params_unscaled = (ALVEN_params.squeeze() * y.std() / Xtrans[:, kwargs['selection']].std(axis=0))
+        label_names = label_names[kwargs['selection']]
+        # Removing the features that had coefficients equal to zero after the final model selection
+        final_selection = np.abs(ALVEN_params.squeeze()) >= 1e-3 # TODO: again, the eps dependency
+        ALVEN_params_unscaled = ALVEN_params_unscaled[final_selection].reshape(-1) # Reshape to avoid 0D arrays when only one variable is selected
+        label_names = label_names[final_selection].reshape(-1)
+        ALVEN_params_unscaled = list(zip(label_names, ALVEN_params_unscaled))
+        return(hyperparams, ALVEN_model, ALVEN_params_unscaled, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name == 'RF':
         if 'max_depth' not in kwargs:
@@ -594,22 +546,14 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         else:
             DALVEN = rm.DALVEN_fitting_full_nonlinear
         kwargs['model_name'] = model_name
-        if 'l1_ratio' not in kwargs:
-            kwargs['l1_ratio'] = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99][::-1]
         if 'degree' not in kwargs:
             kwargs['degree'] = [1, 2, 3]
         if 'lag' not in kwargs:
             kwargs['lag'] =  [i+1 for i in range(40)]
         if 'label_name' not in kwargs:
             kwargs['label_name'] = False
-        if 'selection' not in kwargs:
-            kwargs['selection'] = 'p_value'
-        if 'select_value' not in kwargs:
-            kwargs['select_value'] = 0.05
         if 'trans_type' not in kwargs:
             kwargs['trans_type'] = 'all'
-        if 'use_cross_entropy' not in kwargs:
-            kwargs['use_cross_entropy'] = False
 
         hyperparam_prod = list(product(kwargs['degree'], kwargs['l1_ratio'], range(alpha_num), kwargs['lag']))
         print(f'There are {len(hyperparam_prod)} hyperparameter combinations')
@@ -692,8 +636,6 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
     elif model_name in {'MLP', 'RNN'}:
         # Loss function
         kwargs['device'] = 'cuda' if torch.cuda.is_available() else 'cpu'
-        if 'use_cross_entropy' not in kwargs:
-            kwargs['use_cross_entropy'] = False
         if 'use_cross_entropy' not in kwargs or not kwargs['use_cross_entropy']:
             loss_function = torch.nn.functional.mse_loss
         else:
@@ -704,7 +646,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         if 'MLP_layers' not in kwargs or kwargs['MLP_layers'] is None:
             myshape_X = X.shape[1]
             if kwargs['use_cross_entropy']:
-                myshape_y = np.max(y) + int(0 in y)
+                myshape_y = np.max(y) + int(0 in y) # TODO: len(set(y)) should work better, especially if one of the classes is missing for some reason
             else:
                 myshape_y = y.shape[1]
             kwargs['MLP_layers'] = [[(myshape_X, myshape_X*2), (myshape_X*2, myshape_y)], [(myshape_X, myshape_X), (myshape_X, myshape_y)], [(myshape_X, myshape_X//2), (myshape_X//2, myshape_y)], # One hidden layer
@@ -970,15 +912,15 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         return(hyperparams, kwargs['save_location'], prediction_train, prediction_val, prediction_test, train_loss_final, val_loss_final, test_loss_final)"""
 
 @ignore_warnings()
-def _ALVEN_joblib_fun(X_train, y_train, X_val, y_val, eps, alpha_num, kwargs, counter, prod_idx, this_prod):
+def _ALVEN_joblib_fun(X_train, y_train, X_val, y_val, eps, kwargs, counter, prod_idx, this_prod):
     """
     A helper function to parallelize ALVEN. Shouldn't be called by the user
     """
+    degree, l1_ratio, alpha = this_prod[0], this_prod[1], this_prod[2]
     if prod_idx == 0 or not (prod_idx+1)%200:
         print(f'Beginning run {prod_idx+1:4} of fold {counter+1:3}', end = '\r')
-    _, variable, _, mse, _, _ , _, _ = rm.ALVEN_fitting(X_train, y_train, X_val, y_val, alpha = this_prod[2], l1_ratio = this_prod[1],
-                                degree = this_prod[0], tol = eps , alpha_num = alpha_num, cv = True, selection = kwargs['selection'],
-                                select_value = kwargs['select_value'], trans_type = kwargs['trans_type'], use_cross_entropy = kwargs['use_cross_entropy'])
+    _, variable, _, mse, _, _, _ = rm.ALVEN_fitting(X_train, y_train, X_val, y_val, alpha, l1_ratio, degree,
+                                tol = eps, selection = kwargs['selection'], trans_type = kwargs['trans_type'])
     return mse, np.sum(variable.flatten() != 0)
 
 @ignore_warnings()

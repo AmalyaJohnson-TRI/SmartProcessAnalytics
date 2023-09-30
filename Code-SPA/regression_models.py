@@ -66,7 +66,7 @@ def SPLS_fitting(X, y, X_test, y_test, K = None, eta = None, eps = 1e-4, maxstep
 
     return SPLS_model, SPLS_params, mse_train, mse_test, yhat_train, yhat_test
 
-def EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter = 10000, tol = 1e-4, use_cross_entropy = False):
+def EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter = 10000, tol = 1e-4):
     """
     Fits data using sklearn's Elastic Net model
 
@@ -147,8 +147,8 @@ def LASSO_fitting(X, y, X_test, y_test, alpha, max_iter = 10000, tol = 1e-4):
     mse_test = MSE(y_test, yhat_test)
     return (LASSO_model, LASSO_params, mse_train, mse_test, yhat_train, yhat_test)
 
-def ALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, alpha_num = None, cv = False, max_iter = 10000, 
-                tol = 1e-4, selection = 'p_value', select_value = 0.15, trans_type = 'all', use_cross_entropy = False):
+def ALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, max_iter = 10000,
+                  tol = 1e-4, selection = None, trans_type = 'all'):
     """
     Fits data using Algebraic Learning Via Elastic Net
     https://doi.org/10.1016/j.compchemeng.2020.107103
@@ -160,33 +160,22 @@ def ALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, alpha_num =
     X_test, y_test : Numpy array with shape N_test x m, N_test x 1
         Testing data predictors and response.
     alpha : float or int
-        Regularization parameter weight.
+        The weight of the L1 and L2 regularizations: alpha*l1_ratio*||w||_1 + 0.5*alpha*(1 - l1_ratio)*||w||^2_2
     l1_ratio : float
         Ratio of L1 penalty to total penalty. When l1_ratio == 1, only the L1 penalty is used.
     degree : int, optional, default = 1
         The degrees of nonlinear mapping.
-    alpha_num : int, optional, default = None
-        Penalty weight used.
-    cv : bool, optional, default = False
-        Whether the run is done to validate a model or test the best model.
-    selection : str, optional, default = 'p_value'
-        Selection criterion for the pre-processing step
-        Must be in {'p_value', 'percentage', 'elbow'}
-    select_value : float, optional, default = 0.10
-        The minimum p_value for a variable to be considered relevant (when selection == 'p_value'), ...
-            or the first select_value percent variables to be used (when selection == 'percentage').
-        Not relevant when selection == 'elbow'
+    selection : array of Bool, optional, default = None
+        Which variables will be used. This is obtained automatically by SPA and should not be passed by the user
     trans_type : str in {'all', 'poly', 'simple_interaction'}, optional, default == 'all'
         Whether to include all transforms (polynomial, log, sqrt, and inverse), only polynomial transforms (and, ...
             optionally, interactions), or just interactions.
-        The log, sqrt, and inverse terms never include interactions among the same transform type (such as ln(x1)*ln(x4)), but ...
-            include some interactions among each other for the same variable (such as ln(x0)*1/x0, x0*sqrt(x0), etc.).
-    use_cross_entropy : bool, optional, default = False
-        Whether to use cross entropy or MSE for model comparison.
+        The log, sqrt, and inverse terms never include interactions among the same transform type (such as ln(x1)*ln(x4)), ...
+            but include some interactions among each other for the same variable (such as ln(x0)/x0, x0^1.5, etc.).
     """
 
     # Feature transformation
-    X, X_test, _ = _feature_trans(X, X_test, degree, interaction = True, trans_type = trans_type)
+    X, X_test, label_names = _feature_trans(X, X_test, degree, interaction = True, trans_type = trans_type)
 
     # Remove features with insignificant variance
     sel = VarianceThreshold(threshold = tol).fit(X)
@@ -202,64 +191,23 @@ def ALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, alpha_num =
     scaler_y.fit(y)
     y = scaler_y.transform(y)
     y_test = scaler_y.transform(y_test)
-  
-    # Eliminate features
-    f_test, p_values = f_regression(X, y.flatten())
 
-    if selection.casefold() == 'p_value':
-        retain_index = p_values < select_value
-    elif selection.casefold() == 'percentage':
-        number = int(np.ceil(select_value * X.shape[1]))
-        f_test.sort()
-        value = f_test[-number]
-        retain_index = f_test >= value
-    else:
-        f = np.copy(f_test)
-        f = np.sort(f)[::-1]
+    if selection is not None:
+        X = X[:, selection]
+        X_test = X_test[:, selection]
 
-        axis = np.linspace(0, len(f)-1, len(f))
-        AllCord = np.concatenate((axis.reshape(-1,1), f.reshape(-1,1)), axis = 1)
-
-        lineVec = AllCord[-1] - AllCord[0]
-        lineVec /= np.sqrt(np.sum(lineVec**2))
-        vecFromFirst = AllCord- AllCord[0] # Distance from each point to the line
-        # And calculate the distance of each point to the line
-        scalarProduct = np.sum(vecFromFirst * matlib.repmat(lineVec, len(f), 1), axis = 1)
-        vecFromFirstParallel = np.outer(scalarProduct, lineVec)
-        vecToLine = vecFromFirst - vecFromFirstParallel
-        distToLine = np.sqrt(np.sum(vecToLine**2, axis = 1))
-        BestPoint = np.argmax(distToLine)
-        value = f[BestPoint]
-        retain_index = f_test>=value
-
-    X_fit =  X[:, retain_index]
-    X_test_fit = X_test[:, retain_index]
-
-    if X_fit.shape[1] == 0:
+    if X.shape[1] == 0:
         print('No variable was selected by ALVEN')
         ALVEN_model = None
-        ALVEN_params = None
+        ALVEN_params = np.empty(0)
         mse_train = np.var(y)
-        mse_test = np.var(y_test)
-        yhat_train = np.zeros(y.shape) # TODO: if we're fitting the mean, this should not be zeros, but rather y - np.mean(y)
-        yhat_test = np.zeros(y_test.shape)
+        mse_test = np.mean((y_test - np.mean(y))**2)
+        yhat_train = np.ones_like(y) * np.mean(y)
+        yhat_test = np.ones_like(y_test) * np.mean(y)
         alpha = 0
     else:
-        if alpha_num is not None and cv:
-            X_max = np.concatenate((X_fit,X_test_fit),axis = 0) # TODO: should we really include the test set here? This looks like test-set leakage
-            y_max = np.concatenate((y, y_test), axis = 0)
-            alpha_max = (np.sqrt(np.sum(np.dot(X_max.T,y_max) ** 2, axis=1)).max())/X_max.shape[0]/l1_ratio
-            alpha_list = np.logspace(np.log10(alpha_max * tol), np.log10(alpha_max), alpha_num)[::-1]
-            alpha = alpha_list[alpha]
-
-        if alpha_num is not None and not cv:
-            alpha_max = (np.sqrt(np.sum(np.dot(X_fit.T,y) ** 2, axis=1)).max())/X_fit.shape[0]/l1_ratio
-            alpha_list = np.logspace(np.log10(alpha_max * tol), np.log10(alpha_max), alpha_num)[::-1]
-            alpha = alpha_list[alpha]
-
-        # EN for model fitting
-        ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test = EN_fitting(X_fit, y, X_test_fit, y_test, alpha, l1_ratio, max_iter, tol, use_cross_entropy)
-    return (ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, alpha, retain_index)
+        ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test = EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter, tol)
+    return (ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, label_names)
 
 def DALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree, lag, alpha_num = None, cv = False, max_iter = 10000, 
                 tol = 1e-4, selection = 'p_value', select_value = 0.10, trans_type = 'all', use_cross_entropy = False):
