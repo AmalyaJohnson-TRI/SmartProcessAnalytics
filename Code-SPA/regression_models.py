@@ -4,7 +4,7 @@ Modified by Pedro Seber, https://github.com/PedroSeber/SmartProcessAnalytics
 """
 import statsmodels.api as sm
 from SPLS_Python import SPLS
-from sklearn.linear_model import ElasticNet, Lasso, Ridge
+from sklearn.linear_model import ElasticNet
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 from sklearn.feature_selection import f_regression, VarianceThreshold
@@ -94,59 +94,6 @@ def EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter = 10000, tol = 1e
     mse_test = MSE(y_test, yhat_test)
     return (EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test)
 
-def RR_fitting(X, y, X_test, y_test, alpha, l1_ratio):
-    """
-    Fits data using sklearn's Ridge Regression model
-
-    Parameters
-    ----------
-    X, y : Numpy array with shape N x m, N x 1
-        Training data predictors and response.
-    X_test, y_test : Numpy array with shape N_test x m, N_test x 1
-        Testing data predictors and response.
-    alpha : float
-        Regularization parameter weight.
-    l1_ratio : float
-        Ratio of L1 penalty to total penalty. When l1_ratio == 1, only the L1 penalty is used.
-    """
-
-    # Training
-    RR_model = Ridge(alpha = alpha, fit_intercept = False).fit(X, y)
-    yhat_train = np.dot(X, RR_params).reshape((-1,1))
-    mse_train = MSE(y, yhat_train)
-    RR_params = RR_model.coef_.reshape((-1,1)) # Fitted parameters
-
-    # Testing
-    yhat_test = np.dot(X_test, RR_params).reshape((-1,1))
-    mse_test = MSE(y_test, yhat_test)
-    return (RR_model, RR_params, mse_train, mse_test, yhat_train, yhat_test)
-
-def LASSO_fitting(X, y, X_test, y_test, alpha, max_iter = 10000, tol = 1e-4):
-    """
-    Fits data using sklearn's LASSO model
-
-    Parameters
-    ----------
-    X, y : Numpy array with shape N x m, N x 1
-        Training data predictors and response.
-    X_test, y_test : Numpy array with shape N_test x m, N_test x 1
-        Testing data predictors and response.
-    alpha : float
-        Regularization parameter weight.
-    """
-
-    # Training
-    LASSO_model = Lasso(random_state = 0, alpha = alpha, fit_intercept = False, max_iter = max_iter, tol = tol)
-    LASSO_model.fit(X, y)
-    yhat_train = LASSO_model.predict(X).reshape((-1,1))
-    mse_train = MSE(y, yhat_train)
-    LASSO_params = LASSO_model.coef_.reshape((-1,1)) # Fitted parameters
-
-    # Testing
-    yhat_test = LASSO_model.predict(X_test).reshape((-1,1))
-    mse_test = MSE(y_test, yhat_test)
-    return (LASSO_model, LASSO_params, mse_train, mse_test, yhat_train, yhat_test)
-
 def ALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, max_iter = 10000,
                   tol = 1e-4, selection = None, trans_type = 'all'):
     """
@@ -176,12 +123,6 @@ def ALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, max_iter = 
 
     # Feature transformation
     X, X_test, label_names = _feature_trans(X, X_test, degree, interaction = True, trans_type = trans_type)
-
-    # Remove features with insignificant variance
-    sel = VarianceThreshold(threshold = tol).fit(X)
-    X = sel.transform(X)
-    X_test = sel.transform(X_test)
-
     # Scale data (based on z-score)
     scaler_x = StandardScaler(with_mean=True, with_std=True)
     scaler_x.fit(X)
@@ -197,13 +138,13 @@ def ALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, max_iter = 
         X_test = X_test[:, selection]
 
     if X.shape[1] == 0:
-        print('No variable was selected by ALVEN')
+        #print('No variable was selected by ALVEN')
         ALVEN_model = None
         ALVEN_params = np.empty(0)
         mse_train = np.var(y)
-        mse_test = np.mean((y_test - np.mean(y))**2)
-        yhat_train = np.ones_like(y) * np.mean(y)
-        yhat_test = np.ones_like(y_test) * np.mean(y)
+        mse_test = np.var(y_test)
+        yhat_train = np.zeros(y.shape) # Ok to be 0 because y is scaled --> mean(y) is approximately 0
+        yhat_test = np.zeros(y_test.shape)
         alpha = 0
     else:
         ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test = EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter, tol)
@@ -535,7 +476,7 @@ def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type 
         label_names = label_names[~interaction_column]
         if X_test is not None:
             X_test_out = X_test_out[:, ~interaction_column]
-    # Including ln, sqrt, and inverse terms
+    # Including ln, sqrt, and inverse terms; and also their higher-degree transforms if degree >= 2
     if trans_type.casefold() == 'all':
         # ln transform
         Xlog_trans = poly.fit_transform(Xlog)[:, ~interaction_column] # Transforming and removing interactions, as we do not care about log-log interactions

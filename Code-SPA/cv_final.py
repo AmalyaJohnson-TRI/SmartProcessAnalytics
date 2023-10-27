@@ -6,7 +6,6 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold, RepeatedKFold, ShuffleSplit, TimeSeriesSplit, GroupKFold, GroupShuffleSplit, train_test_split
 from sklearn.cross_decomposition import PLSRegression
-from sklearn.linear_model import Ridge
 from sklearn.feature_selection import VarianceThreshold
 from sklearn.utils._testing import ignore_warnings
 from sklearn.metrics import mean_squared_error as MSE
@@ -130,7 +129,6 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         kwargs['l1_ratio'] = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99][::-1]
     if 'alpha' not in kwargs: # Unusual scenario, since SPA passes a default kwargs['alpha'] == 20
         kwargs['alpha'] = np.concatenate(([0], np.logspace(-4.3, 0, 20)))
-        print('a'*50)
     elif isinstance(kwargs['alpha'], int): # User passed an integer instead of a list of values
         kwargs['alpha'] = np.concatenate(([0], np.logspace(-4.3, 0, kwargs['alpha'])))
     if 'use_cross_entropy' not in kwargs:
@@ -316,48 +314,6 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         mse_test = MSE(yhat_test.flatten(), y_test.flatten())
         return(hyperparams, PLS_model, PLS_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
-    elif model_name == 'RR':
-        MSE_result = np.empty((len(kwargs['alpha']), K_fold*Nr)) * np.nan
-
-        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
-            # Rescaling to avoid validation dataset leakage
-            scaler_x_train = StandardScaler(with_mean=True, with_std=True)
-            scaler_x_train.fit(X_train)
-            X_train_scale = scaler_x_train.transform(X_train)
-            X_val_scale = scaler_x_train.transform(X_val)
-            scaler_y_train = StandardScaler(with_mean=True, with_std=True)
-            scaler_y_train.fit(y_train)
-            y_train_scale = scaler_y_train.transform(y_train)
-            y_val_scale = scaler_y_train.transform(y_val)
-            for i in range(len(kwargs['alpha'])):
-                RR = Ridge(alpha = kwargs['alpha'][i], fit_intercept = False).fit(X_train_scale, y_train_scale)
-                Para = RR.coef_.reshape(-1,1)
-                yhat_val = np.dot(X_val_scale, Para)
-                MSE_result[i, counter] = MSE(y_val_scale.flatten(), yhat_val.flatten())
-
-        MSE_mean = np.nanmean(MSE_result, axis = 1)
-        # Min MSE value (first occurrence)
-        ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
-        if kwargs['robust_priority']:
-            MSE_std = np.nanstd(MSE_result, axis = 1)
-            MSE_min = MSE_mean[ind]
-            MSE_bar = MSE_min + MSE_std[ind]
-            ind = np.nonzero( kwargs['alpha'] == np.nanmax(kwargs['alpha'][MSE_mean < MSE_bar]) ) # Hyperparams with the highest alpha but still within one stdev of the best MSE
-            ind = ind[0][0]
-
-        # Hyperparameter setup
-        alpha = kwargs['alpha'][ind]
-        hyperparams = {'alpha': alpha}
-
-        # Fit the final model
-        RR_model = Ridge(alpha = alpha, fit_intercept = False).fit(X, y)
-        RR_params = RR_model.coef_.reshape(-1,1)
-        yhat_train = np.dot(X, RR_params)
-        yhat_test = np.dot(X_test, RR_params)
-        mse_train = MSE(yhat_train.flatten(), y.flatten())
-        mse_test = MSE(yhat_test.flatten(), y_test.flatten())
-        return(hyperparams, RR_model, RR_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
-
     elif model_name == 'ALVEN':
         if 'degree' not in kwargs:
             kwargs['degree'] = [1, 2, 3]
@@ -385,7 +341,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         # Run to obtain the coefficients when ALVEN is run with L1_ratio = 1
         _, ALVEN_params, _, _, _, _, label_names = rm.ALVEN_fitting(X, y, X_test, y_test, hyperparam_prod[ind][2], 1, hyperparam_prod[ind][0], tol = eps,
                                                 selection = None, trans_type = kwargs['trans_type'])
-        kwargs['selection'] = np.abs(ALVEN_params.flatten()) >= 1e-3#3e-4 # TODO: This value could (should?) depend on the "eps" parameter, but I need to learn more about how it works in other models
+        kwargs['selection'] = np.abs(ALVEN_params.flatten()) >= 2.4e-3 # TODO: This value could (should?) depend on the "eps" parameter, but I need to learn more about how it works in other models
         kwargs['degree'] = [hyperparam_prod[ind][0]]
 
         MSE_result = np.empty((len(kwargs['alpha']) * len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan
@@ -713,7 +669,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                 if not str(cur_hp[0]) in list(final_val_loss.columns):
                     final_val_loss.insert(kwargs['MLP_layers'].index(cur_hp[0]), str(cur_hp[0]), np.nan) # layers.index to ensure consistent order
                 # We added a new activation or learning rate to the hyperparameters
-                elif not (cur_hp[2], cur_hp[1]) in final_val_loss.index.to_list():
+                if not (cur_hp[2], cur_hp[1]) in final_val_loss.index.to_list():
                     final_val_loss.loc[(cur_hp[2], cur_hp[1]), :] = np.nan
                     final_val_loss = final_val_loss.sort_index(ascending = [True, False]) # Sorting the indices
 
@@ -1026,14 +982,15 @@ class my_ANN(torch.nn.Module):
 
         # LSTM cell
         if isinstance(lstm_hidden_size, int) and lstm_hidden_size:
-            self.lstm = [torch.nn.LSTM(lstm_input_size, lstm_hidden_size, num_layers=1, batch_first=True, bidirectional=True).to(device)] # Need to send to device because the cells are in a list
+            self.lstm = [torch.nn.LSTM(lstm_input_size, lstm_hidden_size, batch_first=True, bidirectional=True).to(device)] # Need to send to device because the cells are in a list
         elif isinstance(lstm_hidden_size, (list, tuple)):
             self.lstm = []
             for idx, size in enumerate(lstm_hidden_size):
                 if idx == 0:
-                    self.lstm.append(torch.nn.LSTM(lstm_input_size, size, num_layers=1, batch_first=True, bidirectional=True).to(device)) # Need to send to device because the cells are in a list
+                    self.lstm.append(torch.nn.LSTM(lstm_input_size, size, batch_first=True, bidirectional=True).to(device)) # Need to send to device because the cells are in a list
                 else:
-                    self.lstm.append(torch.nn.LSTM(lstm_hidden_size[idx-1], size, num_layers=1, batch_first=True, bidirectional=True).to(device)) # Need to send to device because the cells are in a list
+                    self.lstm.append(torch.nn.LSTM(lstm_hidden_size[idx-1], size, batch_first=True, bidirectional=True).to(device)) # Need to send to device because the cells are in a list
+        self.lstm = torch.nn.ModuleList(self.lstm) # Need to transform list into a ModuleList so PyTorch updates and interacts with the weights properly
         # Transforming layers list into OrderedDict with layers + activation
         mylist = list()
         for idx, elem in enumerate(layers):
@@ -1046,11 +1003,14 @@ class my_ANN(torch.nn.Module):
 
     def forward(self, x, categorical = False):
         if 'lstm' in dir(self):
-            for cell_idx, cell in enumerate(self.lstm):
+            for cell in self.lstm:
                 x, (ht, _) = cell(x)
                 if cell.bidirectional:
                     x = (x[:, :, :x.shape[2]//2] + x[:, :, x.shape[2]//2:]) / 2 # Average between forward and backward
-            to_MLP = (ht[0] + ht[1]) / 2 # Average between forward and backward
+            if cell.bidirectional:
+                to_MLP = (ht[0] + ht[1]) / 2 # Average between forward and backward
+            else:
+                to_MLP = ht
             out = self.model(to_MLP)
         else:
             out = self.model(x)
