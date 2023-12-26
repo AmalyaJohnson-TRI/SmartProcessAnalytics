@@ -3,7 +3,6 @@ from scipy.optimize import least_squares
 from sklearn.cross_decomposition import PLSRegression
 from warnings import simplefilter
 simplefilter(action='ignore', category=FutureWarning)
-import pdb
 
 def SPLS(X, y, K, eta, kappa = 0.5, select = 'pls2', eps = 1e-4, max_steps = 200):
     """
@@ -20,7 +19,6 @@ def SPLS(X, y, K, eta, kappa = 0.5, select = 'pls2', eps = 1e-4, max_steps = 200
     if len(y.shape) == 1:
         y = y.reshape(-1, 1)
     potential_idx = np.arange(X.shape[1])
-    #betahat = np.zeros((X.shape[0], y.shape[0]))
     betahat = np.zeros((X.shape[1]))
     betahat_list = []
     new_selected_list = []
@@ -37,7 +35,6 @@ def SPLS(X, y, K, eta, kappa = 0.5, select = 'pls2', eps = 1e-4, max_steps = 200
         my_PLS = PLSRegression(k+1, scale = False, tol = eps).fit(X, y)
         # Updating the beta
         betahat = np.zeros((X.shape[1]))
-        #pdb.set_trace()
         betahat[all_selected] = my_PLS.coef_.squeeze()[all_selected]
         betahat_list.append(betahat)
         if select.casefold() == 'pls2':
@@ -97,21 +94,3 @@ def _hfunction(lambda_val, M, circle, kappa2):
     alpha = np.linalg.inv(M + lambda_val*np.identity(M.shape[0])) @ M @ circle
     obj = alpha.T @ alpha - 1/kappa2**2
     return obj
-
-""" Temp to run R online
-library(spls)
-X = rbind(c(1, 3, 0), c(0, 1, 1), c(2, 1, -1))
-print(X)
-y = c(7, 1, 5)
-oi <- spls(X, y, 2, 0.9, scale.y = TRUE)
-print(attributes(oi))
-print("This is betahat")
-print(oi$betahat)
-print("This is A")
-print(oi$A)
-print("This is betamat")
-print(oi$betamat)
-print("This is new2As")
-print(oi$new2As)
-print(oi)
-"""
