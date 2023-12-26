@@ -37,8 +37,8 @@ def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference 
     Output:
         int, whether there is nonlinearity in dataset
     """
-    poly = PolynomialFeatures(2, include_bias = False, interaction_only = True)
-    Bi = poly.fit_transform(X)[:, X.shape[1]:] # Just the interactions and not the x0, x1, ..., xN terms
+    poly, _, _ = rm._feature_trans(X, degree = 2, interaction = True, trans_type = 'simple_interaction')
+    Bi = poly[:, X.shape[1]+1:] # Just the interaction terms and not the intercept or x0, x1, ..., xN terms
   
     # Nonlinearity by linear correlation, quadratic test, and maximal correlation
     m = np.shape(X)[1]
