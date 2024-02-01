@@ -1,9 +1,8 @@
-"""
-Original work by Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com
-Modified by Pedro Seber
-"""
 import numpy as np
-from ace_cream import ace_cream as ace
+try:
+    from ace_cream import ace_cream as ace
+except ModuleNotFoundError: # ace_cream installs on Windows can be complicated due to compiler needs; the end user may decide to skip it
+    pass
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
 from scipy.stats import f
@@ -15,13 +14,9 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 import statsmodels.stats.api as sms
 import statsmodels.api as sm
 import scipy.stats as stats
-import regression_models as rm
-from sklearn.feature_selection import f_regression
-from sklearn.linear_model import Ridge
-
-import matplotlib.style
-import matplotlib as mpl
-mpl.style.use('default')
+from regression_models import _feature_trans
+from matplotlib import style as mpl_style
+mpl_style.use('default')
 
 def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference = 0.4, xticks = None, yticks = ['y'], round_number = 0):
     """
@@ -37,7 +32,7 @@ def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference 
     Output:
         int, whether there is nonlinearity in dataset
     """
-    poly, _, _ = rm._feature_trans(X, degree = 2, interaction = True, trans_type = 'simple_interaction')
+    poly, _, _ = _feature_trans(X, degree = 2, interaction = True, trans_type = 'simple_interaction')
     Bi = poly[:, X.shape[1]+1:] # Just the interaction terms and not the intercept or x0, x1, ..., xN terms
   
     # Nonlinearity by linear correlation, quadratic test, and maximal correlation
@@ -96,12 +91,13 @@ def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference 
         F = (mse1 - mse2)/(mse2/(N-2))
         p_value = 1 - f.cdf(F, 1, N-2)
         QT[i] = 0 if p_value < 10*np.finfo(float).eps else p_value
-        # Maximal correlation by ACE algorithm
-        if cat is None or cat[i] == 0:
-            tx, ty = ace(X[:, i].reshape(-1, 1), y)
-        else:
-            tx, ty = ace(X[:, i].reshape(-1, 1), y, cat = [0]) # cat is a list with the indices of the X columns that are categorical - in this case, X has only one col, so its idx is 0
-        MC[i] = np.corrcoef(tx.squeeze(), ty.squeeze())[0, 1]
+        # Maximal correlation by ACE algorithm (if available)
+        if 'ace' in globals():
+            if cat is None or cat[i] == 0:
+                tx, ty = ace(X[:, i].reshape(-1, 1), y)
+            else:
+                tx, ty = ace(X[:, i].reshape(-1, 1), y, cat = [0]) # cat is a list with the indices of the X columns that are categorical - in this case, X has only one col, so its idx is 0
+            MC[i] = np.corrcoef(tx.squeeze(), ty.squeeze())[0, 1]
     
     # Bilinear
     if m > 1:
@@ -393,17 +389,13 @@ def residual_analysis(X, y, y_hat, plot = True, nlag = None, alpha = 0.01, round
         plt.tight_layout()
         plt.savefig(f'Residual_plot_{round_number}.png', dpi = 600, bbox_inches='tight')
 
-    # Heteroscedaticity
-    # Test whether variance is the same in 2 subsamples
-    test_GF = sms.het_goldfeldquandt(residual,X)
-    name = ['F statistic', 'p-value']
-    GF_test = dict(zip(name, test_GF[0:2]))
-    # Breusch-Pagan test for heteroscedasticity
-    test_BP = sms.het_breuschpagan(residual, np.column_stack((np.ones((y_hat.shape[0],1)), y_hat)))
-    BP_test = dict(zip(name, test_BP[2:]))
-    # White test for heteroscedasticity
-    test_white = sms.het_white(residual, np.column_stack((np.ones((y_hat.shape[0],1)), y_hat)))
-    White_test = dict(zip(name, test_white[2:]))
+    # Heteroscedasticity - Test whether variance is the same in 2 subsamples
+    if X.shape[1] > 0:
+        test_GF = sms.het_goldfeldquandt(residual,X)
+    else:
+        test_GF = [0, 1]
+    test_BP = sms.het_breuschpagan(residual, np.column_stack((np.ones((y_hat.shape[0],1)), y_hat))) # Breusch-Pagan test
+    test_white = sms.het_white(residual, np.column_stack((np.ones((y_hat.shape[0],1)), y_hat))) # White test
     int_heteroscedasticity = not(test_GF[1] > alpha and test_BP[-1] > alpha and test_white[-1] > alpha) # All tests > alpha -> int_heteroscedasticity = False
     # TODO: shouldn't we have some sort of correction (Bonferroni, etc.) because we're doing 3 tests?
 
@@ -485,12 +477,13 @@ def nonlinearity_assess_dynamic(X, y, plot = True, cat = None, alpha = 0.01, dif
             F = (mse1- mse2)/(mse2/(N-2))
             p_value = 1 - f.cdf(F, 1, N-2)
             QT[i,l] = 0 if p_value < 10*np.finfo(float).eps else p_value
-            # Maximal correlation by ACE algorithm
-            if cat is None or cat[i] == 0:
-                tx, ty = ace(X[:-l-i, i].reshape(-1, 1), y[l+1:])
-            else:
-                tx, ty = ace(X[:-l-i, i].reshape(-1, 1), y[l+1:], cat = [0]) # cat is a list with the indices of the X columns that are categorical - in this case, X has only one col, so its idx is 0
-            MC[i, l] = np.corrcoef(tx.squeeze(), ty.squeeze())[0, 1]
+            # Maximal correlation by ACE algorithm (if available)
+            if 'ace' in globals():
+                if cat is None or cat[i] == 0:
+                    tx, ty = ace(X[:-l-i, i].reshape(-1, 1), y[l+1:])
+                else:
+                    tx, ty = ace(X[:-l-i, i].reshape(-1, 1), y[l+1:], cat = [0]) # cat is a list with the indices of the X columns that are categorical - in this case, X has only one col, so its idx is 0
+                MC[i, l] = np.corrcoef(tx.squeeze(), ty.squeeze())[0, 1]
 
     for l in range(lag):
         # Linear correlation
@@ -505,12 +498,13 @@ def nonlinearity_assess_dynamic(X, y, plot = True, cat = None, alpha = 0.01, dif
         F = (mse1- mse2)/(mse2/(N-2))
         p_value = 1 - f.cdf(F, 1, N-2)
         QT[m,l] = 0 if p_value < 10*np.finfo(float).eps else p_value
-        # Maximal correlation by ACE algorithm
-        if cat is None or cat[i] == 0:
-            tx, ty = ace(y[:-l-i].reshape(-1, 1), y[l+1:])
-        else:
-            tx, ty = ace(y[:-l-i].reshape(-1, 1), y[l+1:], cat = [0]) # cat is a list with the indices of the X columns that are categorical - in this case, X has only one col, so its idx is 0
-        MC[m, l] = np.corrcoef(tx.squeeze(), ty.squeeze())[0, 1]
+        # Maximal correlation by ACE algorithm (if available)
+        if 'ace' in globals():
+            if cat is None or cat[i] == 0:
+                tx, ty = ace(y[:-l-i].reshape(-1, 1), y[l+1:])
+            else:
+                tx, ty = ace(y[:-l-i].reshape(-1, 1), y[l+1:], cat = [0]) # cat is a list with the indices of the X columns that are categorical - in this case, X has only one col, so its idx is 0
+            MC[m, l] = np.corrcoef(tx.squeeze(), ty.squeeze())[0, 1]
         
     if plot:
         # Plot for linear correlation

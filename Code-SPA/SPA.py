@@ -1,7 +1,3 @@
-"""
-Original work by Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com, https://github.com/vickysun5/SmartProcessAnalytics
-Modified by Pedro Seber, https://github.com/PedroSeber/SmartProcessAnalytics
-"""
 import numpy as np
 from dataset_property_new import nonlinearity_assess, collinearity_assess, residual_analysis, nonlinearity_assess_dynamic
 import cv_final as cv
@@ -14,22 +10,20 @@ from pandas import read_excel, read_csv
 import json
 import pickle
 from time import localtime
+from torch import save as torchsave
 # Convenience imports
 from matplotlib import style
 style.use('default')
-from os import environ
-environ['TF_CPP_MIN_LOG_LEVEL'] = '1' # To hide TF optimization messages
 import warnings
 from sklearn.exceptions import ConvergenceWarning
 warnings.filterwarnings('ignore', category = ConvergenceWarning)
 warnings.filterwarnings('ignore', category = RuntimeWarning)
-from torch import save as torchsave
 
 def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None, scale_X = True, scale_y = True, interpretable = False, continuity = False,
             group_name = None, spectral_data = False, plot_interrogation = False, enough_data = False, nested_cv = False, robust_priority = False,
-            dynamic_model = False, lag = [0], significance = 0.05, cat = None, xticks = None, yticks = ['y'], model_name = None, cv_method = None, K_fold = 5, Nr = 10,
-            degree = [1, 2, 3], num_outer = 10, K_steps = 1, l1_ratio = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99], alpha = 20,
-            trans_type = 'all', activation = ['relu'], MLP_layers = None, RNN_layers = None, batch_size = 32, learning_rate = [1e-2, 5e-3], weight_decay = 0,
+            dynamic_model = False, lag = list(range(20)), significance = 0.05, cat = None, xticks = None, yticks = ['y'], model_name = None, cv_method = None, K_fold = 5, Nr = 10,
+            degree = [1, 2, 3], num_outer = 10, K_steps = 1, l1_ratio = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99], alpha = 20, trans_type = 'all',
+            ALVEN_cutoff = 4e-3, ALVEN_interaction = True, activation = ['relu'], MLP_layers = None, RNN_layers = None, batch_size = 32, learning_rate = [1e-2, 5e-3], weight_decay = 0,
             n_epochs = 100, class_loss = None, scheduler = 'plateau', scheduler_mode = 'min', scheduler_factor = 0.5, scheduler_patience = 10, scheduler_min_LR = None,
             scheduler_last_epoch = None, scheduler_warmup = 10, val_loss_file = None, expand_hyperparameter_search = False, maxorder = 10, ADAPTx_path = None,
             ADAPTx_save_path = None, ADAPTx_max_lag = 12, ADAPTx_degrees = [-1, 0, 1]):
@@ -108,7 +102,7 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
         Number of folds used in cross validation.
     Nr : int, optional, default = 10
         Number of CV repetitions used when cv_method in {'MC', 'Re_KFold', 'GroupShuffleSplit'}.
-    degree : list of int, optional, default = [1]
+    degree : list of int, optional, default = [1, 2, 3]
         The maximum degree of the X data transforms.
         Relevant only when model_name in {'ALVEN', 'DALVEN', 'DALVEN_full_nonlinear'}
     num_outer : int, optional, default = 10
@@ -116,7 +110,7 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
         Relevant only when nested_cv == True.
     K_steps : int, optional, default = 1
         Number of future steps for training and test predictions.
-        Relevant only when dynamic_model == True
+        Relevant only when model_name == 'SS'.
     l1_ratio : list of floats, optional, default = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99]
         Ratio of L1 penalty to total penalty. When l1_ratio == 1, only the L1 penalty is used.
         Relevant only when model_name in {'EN', 'ALVEN', 'DALVEN', 'DALVEN_full_nonlinear'}
@@ -129,9 +123,15 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
             optionally, interactions), or just interactions.
         The log, sqrt, and inverse terms never include interactions among the same transform type (such as ln(x1)*ln(x4)), but ...
             include some interactions among each other for the same variable (such as ln(x0)*1/x0, x0*sqrt(x0), etc.).
+    ALVEN_cutoff : float, optional, default = 4e-3
+        The minimum absolute value a scaled coefficient needs to have to not be removed by the clip step of the LCEN algorithm
+        Relevant only when model_name in {'ALVEN', 'DALVEN', 'DALVEN_full_nonlinear'}
+    ALVEN_interaction : bool, optional, default = True
+        Whether to also include interactions between different variables (such as x1*x3 or x0*x5^2)
+        Note that, if trans_type == 'simple_interaction', this variable must be set to True
+        Relevant only when model_name in {'ALVEN', 'DALVEN', 'DALVEN_full_nonlinear'}
     activation : list of str, optional, default = ['relu']
-        The activation function(s) used to build ANNs.
-        Each entry must be in {'relu', 'tanh', 'sigmoid', 'tanhshrink', 'selu'}.
+        The activation function(s) used to build ANNs. Each entry must be in {'relu', 'tanh', 'sigmoid', 'tanhshrink', 'selu'}.
         If multiple values, all are cross-validated and the best is selected.
     MLP_layers: array of arrays of ints, optional, default = None
         An array of arrays in which each entry is a container with the number of neurons in each layer, using the ...
@@ -217,8 +217,8 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
         X_original = Data
         y_original = load_file(main_data_y)
     elif len(Data.shape) == 2: # Typical case with an N x (m+1) main_data
-        X_original = Data[:,:-1]
-        y_original = Data[:,-1]
+        X_original = Data[:, :-1]
+        y_original = Data[:, -1]
     if len(y_original.shape) == 1: # Ensuring y_original is 2D and in an N_samples x N_features form
         y_original = y_original[:, np.newaxis]
 
@@ -228,8 +228,8 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
             X_test_original = Test_data
             y_test_original = load_file(test_data_y)
         else: # Typical case with an N x (m+1) test_data
-            X_test_original = Test_data[:,:-1]
-            y_test_original = Test_data[:,-1]
+            X_test_original = Test_data[:, :-1]
+            y_test_original = Test_data[:, -1]
         if len(y_test_original.shape) == 1: # Ensuring y_test_original is 2D and in an N_samples x N_features form
             y_test_original = y_test_original[:, np.newaxis]
     else:
@@ -290,45 +290,37 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
             else:
                 print('As your data have significant multicollinearity and you do not require an interpretable model, EN, SPLS, and PLS will be used.')
                 model_name = ['EN','SPLS','PLS']
-        # Linear dynamic model
+        # Linear dynamic models
         else:
-            print('As your data have significant dynamics and multicolinearity, SS will be used.') # Originally CVA, SSARX, and MOSEP
-            model_name = ['SS']
+            print('As your data have significant dynamics but are linear, DALVEN (with degree 1) and SS will be used.') # Originally CVA, SSARX, and MOSEP
+            model_name = ['DALVEN', 'SS']
+            degree = [1]
+            trans_type = 'poly'
 
     # Cross-Validation Strategy
     if cv_method is None:
-        if not dynamic_model:
-            if enough_data:
-                cv_method = f'Single{"_group"*bool(group_name)}'
-                print(f'Single {"grouped CV "*bool(group_name)}{"validation "*(not bool(group_name))}will be used.') # Single grouped CV or single validation set
-            elif group_name is None:
-                cv_method = 'Re_KFold'
-                print(f'{"Nested "*nested_cv}CV with repeated KFold in inner loop {"and one-std rule "*robust_priority}will be used.')
-            else:
-                cv_method = 'GroupKFold'
-                print(f'{"Nested "*nested_cv}GroupKFold {"with one-std rule "*robust_priority}will be used.')
+        if not dynamic_model and group_name is None:
+            cv_method = 'Re_KFold'
+            print(f'{"Nested "*nested_cv}CV with repeated KFold in inner loop {"and one-std rule "*robust_priority}will be used.')
+        elif not dynamic_model:
+            cv_method = 'GroupKFold'
+            print(f'{"Nested "*nested_cv}GroupKFold {"with one-std rule "*robust_priority}will be used.')
         # Dynamic models
         elif model_name == ['SS']:
             print('MATLAB/ADAPTx packges with information criterion will be used.')
-        elif enough_data:    
-            cv_method = 'Single_ordered'
-            print('Single validation for time series will be used.')
         elif nested_cv:
             cv_method = 'Timeseries'
-            print('Cross-validation for time series {"with one-std rule "*robust_priority}will be used.')
+            print(f'Cross-validation for time series {"with one-std rule "*robust_priority}will be used.')
         elif robust_priority:
             cv_method = 'BIC'
-            print('BIC information criteria will be used.')
-        elif X_original.shape[0]//X_original.shape[1]<40:
-            cv_method = 'AICc'
-            print('AICc information criteria will be used.')
+            print('BIC (Bayesian information criterion) will be used.')
         else:
-            cv_method = 'AIC'
-            print('AIC information criteria will be used.')
+            cv_method = 'AICc'
+            print('AICc (Akaike information criterion) will be used.')
 
     # Preprocessing the data
-    X = deepcopy(X_original)
-    y = deepcopy(y_original)
+    X = X_original.copy('F') # Switching to Fortran order to speed up Elastic Net (and ALVEN) [but does not make any significant difference]
+    y = y_original.copy('F')
     # Scaling the data
     if scale_X and len(X.shape) == 2: # StandardScaler doesn't work with 3D arrays
         scaler_x = StandardScaler(with_mean=True, with_std=True)
@@ -340,21 +332,24 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
         scaler_y = StandardScaler(with_mean=True, with_std=True)
         scaler_y.fit(y)
         y_scale = scaler_y.transform(y)
+    elif use_cross_entropy:
+        y_scale = np.array(y.squeeze(), dtype = int)
     else:
-        y = y.squeeze()
-        y_scale = np.array(y, dtype = int)
+        y_scale = y
 
     if X_test_original is not None:
-        X_test = deepcopy(X_test_original)
-        y_test = deepcopy(y_test_original)
+        X_test = X_test_original.copy('F')
+        y_test = y_test_original.copy('F')
         if scale_X and len(X.shape) == 2: # StandardScaler doesn't work with 3D arrays
             X_test_scale = scaler_x.transform(X_test)
         else:
             X_test_scale = X_test
         if scale_y and not use_cross_entropy:
             y_test_scale = scaler_y.transform(y_test)
-        else:
+        elif use_cross_entropy:
             y_test_scale = np.array(y_test.squeeze(), dtype = int)
+        else:
+            y_test_scale = y_test
     else:
         X_test = X
         y_test = y
@@ -366,10 +361,10 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
     if 'OLS' in model_name:
         from regression_models import OLS_fitting
         final_model, model_params, mse_train, mse_test, yhat_train, yhat_test = OLS_fitting(X_scale, y_scale, X_test_scale, y_test_scale)
-        fitting_result['OLS'] = {'final_model':final_model, 'model_params':model_params, 'mse_train':mse_train, 'mse_test':mse_test, 'yhat_train':yhat_train, 'yhat_test':yhat_test}
+        fitting_result['OLS'] = {'final_model': final_model, 'model_params': model_params, 'mse_train': mse_train, 'mse_test': mse_test, 'yhat_train': yhat_train, 'yhat_test': yhat_test}
         selected_model = 'OLS'
     # Non-dynamic models
-    if any(temp_model in model_name for temp_model in {'ALVEN', 'SVR', 'RF', 'PLS', 'EN', 'PLS', 'SPLS', 'MLP'}) and 'OLS' not in model_name: # TODO: how do we compare OLS with the other models if OLS doesn't have validation scores?
+    if any(temp_model in model_name for temp_model in {'ALVEN', 'SVR', 'RF', 'EN', 'PLS', 'SPLS', 'MLP'}) and 'OLS' not in model_name: # TODO: how do we compare OLS with the other models if OLS doesn't have validation scores?
         # Static / traditional CV
         if not nested_cv:
             temp_fitting_result = {}
@@ -377,9 +372,9 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
                 if this_model in {'ALVEN', 'SVR', 'RF', 'EN', 'PLS', 'SPLS'}: # There may be other models if the user passed model_name manually
                     print(f'Running model {this_model}', end = '\r')
                     fitting_result[this_model], _ = run_cv_ML(this_model, X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale,
-                            cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type)
+                            cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type, ALVEN_cutoff, ALVEN_interaction)
                     print(f'Completed model {this_model}')
-                elif this_model == 'MLP':
+                elif this_model == 'MLP': # There may be other models if the user passed model_name manually
                     temp = cv.CV_mse(this_model, X_scale, y_scale, X_test_scale, y_test_scale, X, y, cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr,
                         scale_X = scale_X, scale_y = scale_y, use_cross_entropy = use_cross_entropy, activation = activation, MLP_layers = MLP_layers,
                         batch_size = batch_size, learning_rate = learning_rate, weight_decay = weight_decay, n_epochs = n_epochs, val_loss_file = val_loss_file,
@@ -393,24 +388,24 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
                 from sklearn.model_selection import train_test_split
                 MSE_val = np.empty((len(model_name), num_outer)) * np.nan
                 for index_out in range(num_outer):
-                    print(f'Beginning nested CV loop {index_out+1} out of {num_outer}', end = '/r')
+                    print(f'Beginning nested CV loop {index_out+1} out of {num_outer}', end = '\r')
                     X_nest, X_nest_val, y_nest, y_nest_val = train_test_split(X, y, test_size = 1/K_fold, random_state = index_out)
                     X_nest_scale, X_nest_scale_val, y_nest_scale, y_nest_scale_val = train_test_split(X_scale, y_scale, test_size = 1/K_fold, random_state = index_out)
                     for index, this_model in enumerate(model_name):
-                        if this_model in {'ALVEN', 'SVR', 'RF', 'PLS', 'EN', 'PLS', 'SPLS'}: # There may be dynamic models if the user passed model_name manually
+                        if this_model in {'ALVEN', 'SVR', 'RF', 'EN', 'PLS', 'SPLS'}: # There may be other models if the user passed model_name manually
                             MSE_val[index, index_out] = run_cv_ML(this_model, X_nest, y_nest, X_nest_scale, y_nest_scale, X_nest_val, y_nest_val, X_nest_scale_val,
-                                    y_nest_scale_val, cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type, True)
+                                    y_nest_scale_val, cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type, ALVEN_cutoff, ALVEN_interaction, True)
             else:
                 from sklearn.model_selection import LeaveOneGroupOut
                 MSE_val = np.empty((len(model_name), len(np.unique(group)))) * np.nan
                 RMSE_val = np.empty((len(model_name), len(np.unique(group)))) * np.nan
                 logo = LeaveOneGroupOut()
                 for index_out, (train, val) in enumerate( logo.split(X, y.flatten(), groups = group.flatten()) ):
-                    print(f'Beginning nested CV loop {index_out+1}', end = '/r')
+                    print(f'Beginning nested CV loop {index_out+1}', end = '\r')
                     for index, this_model in enumerate(model_name):
-                        if this_model in {'ALVEN', 'SVR', 'RF', 'PLS', 'EN', 'PLS', 'SPLS'}: # There may be dynamic models if the user passed model_name manually
+                        if this_model in {'ALVEN', 'SVR', 'RF', 'EN', 'PLS', 'SPLS'}: # There may be other models if the user passed model_name manually
                             MSE_val[index, index_out] = run_cv_ML(this_model, X[train], y[train], X_scale[train], y_scale[train], X[val], y[val], X_scale[val], y_scale[val],
-                                    cv_method, group[train], K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type, True)
+                                    cv_method, group[train], K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type, ALVEN_cutoff, ALVEN_interaction, True)
 
             # Nested CV MSE results
             time_now = '-'.join([str(elem) for elem in localtime()[:6]]) # YYYY-MM-DD-hh-mm-ss
@@ -436,7 +431,7 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
             # Final model fitting
             local_selected_model = model_name[np.nanargmin(np.mean(MSE_val, axis = 1))]
             fitting_result[local_selected_model], _ = run_cv_ML(local_selected_model, X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale,
-                    cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type)
+                    cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type, ALVEN_cutoff, ALVEN_interaction)
 
     # Dynamic models
     if 'RNN' in model_name:
@@ -445,20 +440,20 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
                         scale_y = scale_y, use_cross_entropy = use_cross_entropy, activation = activation, MLP_layers = MLP_layers, RNN_layers = RNN_layers,
                         batch_size = batch_size, learning_rate = learning_rate, weight_decay = weight_decay, n_epochs = n_epochs, val_loss_file = val_loss_file,
                         expand_hyperparameter_search = expand_hyperparameter_search)
-        fitting_result['RNN'] = {'final_model':temp[0], 'mse_train':temp[2], 'mse_val':temp[1].min().min(), 'mse_test':temp[3],
-        'best_hyperparameters':temp[6], 'yhat_train':temp[4], 'yhat_test':temp[5]}
+        fitting_result['RNN'] = {'final_model': temp[0], 'mse_train': temp[2], 'mse_val': temp[1].min().min(), 'mse_test': temp[3],
+        'best_hyperparameters': temp[6], 'yhat_train': temp[4], 'yhat_test': temp[5]}
         print('Completed model RNN' + ' '*15)
 
     if 'DALVEN' in model_name:
         print('Running model DALVEN', end = '\r')        
         fitting_result['DALVEN'], _ = run_cv_ML('DALVEN', X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale,
-                                    cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type)
+                                    cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type, ALVEN_cutoff, ALVEN_interaction)
         print('Completed model DALVEN')
 
     if 'DALVEN_full_nonlinear' in model_name:
         print('Running model DALVEN_full_nonlinear', end = '\r')        
         fitting_result['DALVEN_full_nonlinear'], _ = run_cv_ML('DALVEN_full_nonlinear', X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale,
-                                    cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type)
+                                    cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type, ALVEN_cutoff, ALVEN_interaction)
         print('Completed model DALVEN_full_nonlinear')
 
     if 'SS' in model_name:
@@ -491,7 +486,7 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
         raise UnboundLocalError(f'You input {model_name} for model_name, but that is not a valid name.')
 
     # Formatting a dictionary for the output
-    if 'lag' in fitting_result[selected_model]['model_hyper'].keys(): # The first "lag" entries are removed from yhat, so we need to remove them from X and y
+    if 'model_hyper' in fitting_result[selected_model] and 'lag' in fitting_result[selected_model]['model_hyper'].keys(): # The first "lag" entries are removed from yhat, so we need to remove them from X and y
         lag = fitting_result[selected_model]['model_hyper']['lag']
     else:
         lag = 0
@@ -507,16 +502,16 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
         fitting_result[selected_model]['yhat_train_nontrans'] = scaler_y.inverse_transform(np.atleast_2d(fitting_result[selected_model]['yhat_train']))
         fitting_result[selected_model]['yhat_train_nontrans_mean'] = np.mean(fitting_result[selected_model]['yhat_train_nontrans'])
         fitting_result[selected_model]['yhat_train_nontrans_stdev'] = np.std(fitting_result[selected_model]['yhat_train_nontrans'])
-        fitting_result[selected_model]['MSE_train_nontrans'] = np.mean( (fitting_result[selected_model]['yhat_train_nontrans'] - y[lag:])**2 )
+        fitting_result[selected_model]['MSE_train_nontrans'] = np.mean( (fitting_result[selected_model]['yhat_train_nontrans'].squeeze() - y[lag:].squeeze())**2 )
         fitting_result[selected_model]['RMSE_train_nontrans'] = np.sqrt(fitting_result[selected_model]['MSE_train_nontrans'])
         fitting_result[selected_model]['yhat_test_nontrans'] = scaler_y.inverse_transform(np.atleast_2d(fitting_result[selected_model]['yhat_test']))
         fitting_result[selected_model]['yhat_test_nontrans_mean'] = np.mean(fitting_result[selected_model]['yhat_test_nontrans'])
         fitting_result[selected_model]['yhat_test_nontrans_stdev'] = np.std(fitting_result[selected_model]['yhat_test_nontrans'])
-        fitting_result[selected_model]['MSE_test_nontrans'] = np.mean( (fitting_result[selected_model]['yhat_test_nontrans'] - y_test[lag:])**2 )
+        fitting_result[selected_model]['MSE_test_nontrans'] = np.mean( (fitting_result[selected_model]['yhat_test_nontrans'].squeeze() - y_test[lag:].squeeze())**2 )
         fitting_result[selected_model]['RMSE_test_nontrans'] = np.sqrt(fitting_result[selected_model]['MSE_test_nontrans'])
     # Residual analysis + test for dynamics in the residual
     if len(y_test.squeeze()) >= 4 and not use_cross_entropy and selected_model != 'RNN': # TODO: residuals with small lengths lead to errors when plotting ACF. Need to figure out why
-        _, dynamic_test_result = residual_analysis(X_test[lag:], y_test[lag:], fitting_result[selected_model]['yhat_test_nontrans'], plot_interrogation, alpha = significance, round_number = selected_model)
+        _, dynamic_test_result = residual_analysis(X_test[lag:], y_test[lag:].squeeze(), fitting_result[selected_model]['yhat_test_nontrans'].squeeze(), plot_interrogation, alpha = significance, round_number = selected_model)
         if dynamic_test_result and not(dynamic_model) and selected_model not in {'RNN', 'DALVEN', 'DALVEN_full_nonlinear', 'ADAPTx'}: # TODO: Get the names of the MATLAB models and add them here
             print('A residual analysis found dynamics in the system. Please run SPA again with dynamic_model = True')
             print('Note that specifying a non-dynamic model will override the dynamic_model flag')
@@ -570,13 +565,13 @@ def load_file(filename):
     return my_file
 
 def run_cv_ML(model_index, X_train, y_train, X_train_scaled, y_train_scaled, X_test, y_test, X_test_scaled, y_test_scaled, cv_method,
-                        group, K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type, for_nested_validation = False):
+                        group, K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type, ALVEN_cutoff, ALVEN_interaction, for_nested_validation = False):
     """
     Runs a nondynamic model for CV or final-run purposes. Automatically called by SPA.
 
     Parameters
     ----------
-    model_index to trans_type
+    model_index to ALVEN_interaction
         Automatically called by SPA based on what was passed to main_SPA()
     for_nested_validation : bool, optional, default = False
         Whether the run is done to validate a model through nested validation (NV) (to determine ...
@@ -589,30 +584,31 @@ def run_cv_ML(model_index, X_train, y_train, X_train_scaled, y_train_scaled, X_t
         X_val_scaled, y_val_scaled = X_test_scaled, y_test_scaled
 
         if model_index in {'ALVEN', 'DALVEN', 'DALVEN_full_nonlinear'}:
-            _, _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train, y_train, X_val, y_val, cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr,
-                    alpha = alpha, l1_ratio = l1_ratio, lag = lag, label_name = True, robust_priority = robust_priority, degree = degree, trans_type = trans_type)
+            _, _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train, y_train, X_val, y_val, None, None, cv_method, K_fold, Nr, group = group, alpha = alpha,
+                    l1_ratio = l1_ratio, lag = lag, label_name = True, robust_priority = robust_priority, degree = degree, trans_type = trans_type,
+                    ALVEN_cutoff = ALVEN_cutoff, ALVEN_interaction = ALVEN_interaction)
         elif model_index == 'SVR' or model_index == 'RF':
-            _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, X_train, y_train, cv_type = cv_method,
-                    group = group, K_fold = K_fold, Nr = Nr, robust_priority = robust_priority)
+            _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, X_train, y_train, cv_method,
+                    K_fold, Nr, group = group, robust_priority = robust_priority)
         else:
-            _, _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, X_train, y_train, cv_type = cv_method,
-                    group = group, K_fold = K_fold, Nr = Nr, alpha = alpha, l1_ratio = l1_ratio, robust_priority = robust_priority)
+            _, _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, X_train, y_train, cv_method,
+                    K_fold, Nr, group = group, alpha = alpha, l1_ratio = l1_ratio, robust_priority = robust_priority)
         return mse_val
     else:
         if model_index in {'ALVEN', 'DALVEN', 'DALVEN_full_nonlinear'}:
-            model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train, y_train, X_test, y_test,
-                    cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr, alpha = alpha, l1_ratio = l1_ratio, lag = lag, label_name = True,
-                    robust_priority = robust_priority, degree = degree, trans_type = trans_type)
+            model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train, y_train, X_test, y_test, None, None,
+                    cv_method, K_fold, Nr, group = group, alpha = alpha, l1_ratio = l1_ratio, lag = lag, label_name = True, robust_priority = robust_priority, degree = degree,
+                    trans_type = trans_type, ALVEN_cutoff = ALVEN_cutoff, ALVEN_interaction = ALVEN_interaction)
             fitting_result = {'model_hyper': model_hyper, 'final_model': final_model, 'model_params': model_params, 'mse_train': mse_train, 'mse_val': mse_val,
                     'mse_test': mse_test, 'yhat_train': yhat_train, 'yhat_test': yhat_test}
         elif model_index == 'SVR' or model_index == 'RF':
-            model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled, y_test_scaled, X_train, y_train,
-                    cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr, robust_priority = robust_priority)
+            model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled, y_test_scaled,
+                    X_train, y_train, cv_method, K_fold, Nr, group = group, robust_priority = robust_priority)
             fitting_result = {'model_hyper': model_hyper, 'final_model': final_model, 'mse_train': mse_train, 'mse_val': mse_val, 'mse_test': mse_test,
                     'yhat_train': yhat_train, 'yhat_test': yhat_test}
         else:
-            model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled, y_test_scaled, X_train, y_train,
-                    cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr, alpha = alpha, l1_ratio = l1_ratio, robust_priority = robust_priority)
+            model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled,
+                    y_test_scaled, X_train, y_train, cv_method, K_fold, Nr, group = group, alpha = alpha, l1_ratio = l1_ratio, robust_priority = robust_priority)
             fitting_result = {'model_hyper': model_hyper, 'final_model': final_model, 'model_params': model_params, 'mse_train': mse_train, 'mse_val': mse_val,
                     'mse_test': mse_test, 'yhat_train': yhat_train, 'yhat_test': yhat_test}
         return fitting_result, mse_val

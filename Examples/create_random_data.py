@@ -16,19 +16,19 @@ def create_random_data(data_size, mode, data_range = (-10, 10), degrees = [1], s
         noise_MC = rng.normal(0, X_noise_sigma, X_0.shape)
         X_1 = X_0 + noise_MC
         X_data = np.concatenate((X_0, X_1), axis = 1)
+        coefficients = np.array([4, 2])
         print(f'The X_1 noise level for the multicollinear model is {np.mean(np.abs(noise_MC/X_0))*100:.1f}%')
     else: # General case
         X_data = rng.integers(data_range[0]*10, data_range[1]*10, data_size) / 10 # Numbers between data_range[0] and data_range[1] with one decimal place
     # Setting up the other parameters for the function
     noise = tuple(int(elem) if elem == int(elem) else elem for elem in noise) # Changes integer noise parameters to actual ints for display convenience
     noise_vals = rng.normal(noise[0], noise[1], X_data.shape[0]) # Always run to "burn" X_data.shape[0] values from rng to ensure reproducibility between noisy and noiseless runs
-    ###noise_vals = rng.normal(noise[0], noise[1], X_data.shape)
     if noise[1]:
         noise_str = f' + ϵ{noise}'
     else:
         noise_str = ''
         noise_vals = 0
-    if not coefficients:
+    if coefficients is None:
         coefficients = rng.integers(-100, 100, X_data.shape[1]) / 10
     else:
         _ = rng.integers(-100, 100, X_data.shape[1]) / 10 # Ran to "burn" X_data.shape[1] values from the rng to ensure reproducibility
@@ -38,7 +38,6 @@ def create_random_data(data_size, mode, data_range = (-10, 10), degrees = [1], s
     if mode.casefold() == 'poly':
         is_ln = [False]*X_data.shape[1]
         y_data = (coefficients * X_data**powers).sum(axis = 1)
-        ###y_data_noisy = (coefficients * (X_data+noise_vals)**powers).sum(axis = 1)
     elif mode.casefold() == 'log':
         is_ln = [True]*X_data.shape[1]
         y_data = (coefficients * np.log(np.abs(X_data))**powers).sum(axis = 1)
@@ -54,11 +53,12 @@ def create_random_data(data_size, mode, data_range = (-10, 10), degrees = [1], s
         c = 299792458 # m / s
         y_data = c**2 * X_data[:, 0]**2 * X_data[:, 1]**2 + c**4 * X_data[:, 0]**2 # E^2
         functional_form_str = f'E^2 = 8.98755e16*m^2*v^2 + 8.07761e33*m^2{noise_str}'
+        file_name = f'{mode}_{data_size[0]}x{data_size[1]}-data_{data_range[0]}to{data_range[1]}-range_{seed}-seed_({noise[0]},{noise[1]:.2e})-noise.csv'
         print(f'Relativistic effects account for {np.mean(1 - c**4 * X_data[:, 0]**2/y_data)*100:.2f}% of this system\'s energy')
     elif mode.casefold() in {'multicollinear', 'multicollinearity'}:
         mode = 'multicollinear'
-        y_data = (2*X_data).sum(axis = 1)
-        functional_form_str = f'y = 2*X_0 + 2*X_1{noise_str}'
+        y_data = (coefficients*X_data).sum(axis = 1)
+        functional_form_str = f'y = 4*X_0 + 2*X_1{noise_str}'
         file_name = f'{mode}_{data_size[0]}x2-data_{data_range[0]}to{data_range[1]}-range_{seed}-seed_({noise[0]},{noise[1]})-ynoise_(0,{X_noise_sigma})-Xnoise.csv'
     else: # TODO: mixture of log and linear, maybe other functional forms
         raise NotImplementedError
@@ -93,7 +93,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description = 'Creates "data_size" random points, then use them and a functional form (defined by "mode" and "degrees") to generate a y response.')
     parser.add_argument('data_size', type = int, nargs = 2, help = 'The size of the X data that will be randomly created')
-    parser.add_argument('mode', type = str, nargs = 1, help = 'The functional form of the dataset response. Must be in {"poly", "log"}')
+    parser.add_argument('mode', type = str, nargs = 1, help = 'The functional form of the dataset response. Must be in {"poly", "log", "energy", "multicollinear"}. "Muticollinear" is for a specific test, and in general should not be called by the user')
     parser.add_argument('-dr', '--datarange', type = int, nargs = 2, metavar = (-10, 10), default = (-10, 10), help = 'Integers representing the minimum and maximum values of the X data. ' +
                         'The limits are multiplied by 10, used to generate random integers, then divided by 10 to turn the X data into floats with one decimal digit.')
     parser.add_argument('-d', '--degrees', type = float, nargs = '+', metavar = 1, default = [1], help = 'A list of valid degrees to which the X data is randomly raised.' +
