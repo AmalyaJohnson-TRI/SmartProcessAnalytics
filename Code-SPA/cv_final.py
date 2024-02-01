@@ -1,7 +1,3 @@
-"""
-Original work by Weike (Vicky) Sun vickysun@mit.edu/weike.sun93@gmail.com, https://github.com/vickysun5/SmartProcessAnalytics
-Modified by Pedro Seber, https://github.com/PedroSeber/SmartProcessAnalytics
-"""
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold, RepeatedKFold, ShuffleSplit, TimeSeriesSplit, GroupKFold, GroupShuffleSplit, train_test_split
@@ -10,7 +6,6 @@ from sklearn.feature_selection import VarianceThreshold
 from sklearn.utils._testing import ignore_warnings
 from sklearn.metrics import mean_squared_error as MSE
 import regression_models as rm
-import nonlinear_regression_other as nro
 from itertools import product
 from joblib import Parallel, delayed
 import torch
@@ -129,46 +124,42 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
     if 'alpha' not in kwargs: # Unusual scenario, since SPA passes a default kwargs['alpha'] == 20
         kwargs['alpha'] = np.concatenate(([0], np.logspace(-4.3, 0, 20)))
     elif isinstance(kwargs['alpha'], int): # User passed an integer instead of a list of values
-        kwargs['alpha'] = np.concatenate(([0], np.logspace(-4.3, 0, kwargs['alpha'])))
+        kwargs['alpha'] = np.concatenate( ([0], np.logspace(-4.3, 0, kwargs['alpha'])) )
     if 'use_cross_entropy' not in kwargs:
         kwargs['use_cross_entropy'] = False
 
     if model_name == 'EN':
-        MSE_result = np.empty((len(kwargs['alpha']), len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan
-        if kwargs['robust_priority']:
-            Var = np.empty((len(kwargs['alpha']), len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan
+        hyperparam_prod = list(product(kwargs['l1_ratio'], kwargs['alpha']))
+        MSE_result = np.empty((len(kwargs['alpha']) * len(kwargs['l1_ratio']), K_fold*Nr)) * np.nan
+        Var = np.empty((len(kwargs['alpha']) * len(kwargs['l1_ratio']), X_unscaled.shape[1], K_fold*Nr)) * np.nan
 
-        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
-            # Rescaling to avoid validation dataset leakage
-            scaler_x_train = StandardScaler(with_mean=True, with_std=True)
-            scaler_x_train.fit(X_train)
-            X_train_scale = scaler_x_train.transform(X_train)
-            X_val_scale = scaler_x_train.transform(X_val)
-            scaler_y_train = StandardScaler(with_mean=True, with_std=True)
-            scaler_y_train.fit(y_train)
-            y_train_scale = scaler_y_train.transform(y_train)
-            y_val_scale = scaler_y_train.transform(y_val)
-            for j in range(len(kwargs['l1_ratio'])):
-                for i in range(len(kwargs['alpha'])):
-                    _, variable, _, mse, _, _ = rm.EN_fitting(X_train_scale, y_train_scale, X_val_scale, y_val_scale, kwargs['alpha'][i], kwargs['l1_ratio'][j])
-                    MSE_result[i, j, counter] = mse
-                    if kwargs['robust_priority']:
-                        Var[i, j, counter] = np.sum(variable.flatten() != 0)
+        with Parallel(n_jobs = -1) as PAR:
+            for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+                # Rescaling to avoid validation dataset leakage
+                scaler_x = StandardScaler(with_mean=True, with_std=True)
+                scaler_x.fit(X_train)
+                X_train_scale = scaler_x.transform(X_train)
+                X_val_scale = scaler_x.transform(X_val)
+                scaler_y = StandardScaler(with_mean=True, with_std=True)
+                scaler_y.fit(y_train)
+                y_train_scale = scaler_y.transform(y_train)
+                y_val_scale = scaler_y.transform(y_val)
+                temp = PAR(delayed(rm.EN_fitting)(X_train_scale, y_train_scale, X_val_scale, y_val_scale, this_prod[1], this_prod[0]) for this_prod in hyperparam_prod)
+                _, Var[:, :, counter], _, MSE_result[:, counter], _, _ = zip(*temp)
 
-        MSE_mean = np.nanmean(MSE_result, axis = 2)
+        MSE_mean = np.nanmean(MSE_result, axis = 1)
         # Min MSE value (first occurrence)
-        ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
+        ind = np.nanargmin(MSE_mean)
         if kwargs['robust_priority']:
-            MSE_std = np.nanstd(MSE_result, axis = 2)
+            MSE_std = np.nanstd(MSE_result, axis = 1)
             MSE_min = MSE_mean[ind]
             MSE_bar = MSE_min + MSE_std[ind]
-            Var_num = np.nansum(Var, axis = 2)
-            ind = np.nonzero( Var_num == np.nanmin(Var_num[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
-            ind = (ind[0][0], ind[1][0])
+            Var = np.sum(Var != 0, axis = 1) # Here, Var is n_hyperparams x n_features x n_folds
+            Var_num = np.nansum(Var, axis = 1) # Here, Var is n_hyperparams x n_folds, and Var_num is n_hyperparams
+            ind = np.nonzero( Var_num == np.nanmin(Var_num[MSE_mean < MSE_bar]) )[0][0] # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
 
         # Hyperparameter setup
-        alpha = kwargs['alpha'][ind[0]]
-        l1_ratio = kwargs['l1_ratio'][ind[1]]
+        l1_ratio, alpha = hyperparam_prod[ind]
         hyperparams = {'alpha': alpha, 'l1_ratio': l1_ratio}
         # Fit the final model
         if alpha:
@@ -225,88 +216,44 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         SPLS_model, SPLS_params, mse_train, mse_test, yhat_train, yhat_test = rm.SPLS_fitting(X, y, X_test, y_test, eta = eta, K = K)
         return(hyperparams, SPLS_model, SPLS_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
-    elif model_name == 'POLY': # TODO: add onestd? # TODO: POLY can't even be called from SPA()
-        if 'degree' not in kwargs:
-            kwargs['degree'] = [2,3,4]
-        if 'interaction' not in kwargs:
-            kwargs['interaction'] = True
-        if 'trans_type' not in kwargs:
-            kwargs['trans_type'] = 'poly'
-
-        MSE_result = np.empty((len(kwargs['degree']), K_fold*Nr)) * np.nan
-
-        for d in range(len(kwargs['degree'])):
-            X_trans, _ = rm._feature_trans(X, X_test, kwargs['degree'][d], kwargs['interaction'], kwargs['trans_type'])
-            X_trans = np.hstack((np.ones([X_trans.shape[0], 1]), X_trans))
-            for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_trans, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
-                _, _, _, mse, _, _ = rm.OLS_fitting(X_train, y_train, X_val, y_val)
-                MSE_result[d, counter] = mse
-
-        MSE_mean = np.nanmean(MSE_result, axis = 1)
-        # Min MSE value (first occurrence)
-        ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
-        """if kwargs['robust_priority']:
-            MSE_std = np.nanstd(MSE_result, axis = 1)
-            MSE_min = MSE_mean[ind]
-            MSE_bar = MSE_min + MSE_std[ind]
-            Var_num = np.nansum(Var, axis = 1)
-            ind = np.nonzero( Var_num == np.nanmin(Var_num[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
-            ind = (ind[0][0], ind[1][0])"""
-
-        # Hyperparameter setup
-        degree = kwargs['degree'][ind[0]]
-        hyperparams = {}
-        hyperparams['degree'] = int(degree)
-
-        # Fit the final model
-        X_trans, X_trans_test = rm._feature_trans(X, X_test, degree, kwargs['interaction'], kwargs['trans_type'])
-        X_trans = np.hstack((np.ones([X_trans.shape[0], 1]), X_trans))
-        X_trans_test = np.hstack((np.ones([X_trans_test.shape[0], 1]), X_trans_test))
-
-        POLY_model, POLY_params, mse_train, mse_test, yhat_train, yhat_test = rm.OLS_fitting(X_trans, y, X_trans_test, y_test)
-        return(hyperparams, POLY_model, POLY_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
-
-    elif model_name == 'PLS':
+    elif model_name == 'PLS':  # TODO: merge with SPLS, since this is just a special case with eta = 0
         if not(cv_type.startswith('Group')) and 'K' not in kwargs: # For non-grouped CV types
-            kwargs['K'] = np.linspace( 1, min(X.shape[1], int((K_fold-1)/K_fold * X.shape[0] - 1)), min(X.shape[1], int((K_fold-1)/K_fold * X.shape[0] - 1)) )
+            kwargs['K'] = np.linspace(1, min(X.shape[1], int((K_fold-1)/K_fold * X.shape[0] - 1)), min(X.shape[1], int((K_fold-1)/K_fold * X.shape[0] - 1)), dtype = int)
         elif 'K' not in kwargs:
-            kwargs['K'] = np.linspace(1, min(X.shape[1], X.shape[0]-1), min(X.shape[1], X.shape[0]-1))
+            kwargs['K'] = np.linspace(1, min(X.shape[1], X.shape[0]-1), min(X.shape[1], X.shape[0]-1), dtype = int)
 
         MSE_result = np.zeros((len(kwargs['K']), K_fold*Nr))
 
-        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
-            # Rescaling to avoid validation dataset leakage
-            scaler_x_train = StandardScaler(with_mean=True, with_std=True)
-            scaler_x_train.fit(X_train)
-            X_train_scale = scaler_x_train.transform(X_train)
-            X_val_scale = scaler_x_train.transform(X_val)
-            scaler_y_train = StandardScaler(with_mean=True, with_std=True)
-            scaler_y_train.fit(y_train)
-            y_train_scale = scaler_y_train.transform(y_train)
-            y_val_scale = scaler_y_train.transform(y_val)
-            for i in range(len(kwargs['K'])):
-                PLS = PLSRegression(scale = False, n_components = int(kwargs['K'][i]), tol = eps).fit(X_train_scale, y_train_scale)
-                PLS_para = PLS.coef_.reshape(-1,1)
-                yhat_val = np.dot(X_val_scale, PLS_para)
-                MSE_result[i, counter] = MSE(y_val_scale.flatten(), yhat_val.flatten())
+        with Parallel(n_jobs = -1) as PAR:
+            for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
+                # Rescaling to avoid validation dataset leakage
+                scaler_x_train = StandardScaler(with_mean=True, with_std=True)
+                scaler_x_train.fit(X_train)
+                X_train_scale = scaler_x_train.transform(X_train)
+                X_val_scale = scaler_x_train.transform(X_val)
+                scaler_y_train = StandardScaler(with_mean=True, with_std=True)
+                scaler_y_train.fit(y_train)
+                y_train_scale = scaler_y_train.transform(y_train)
+                y_val_scale = scaler_y_train.transform(y_val)
+                temp = PAR(delayed(rm.PLS_fitting)(X_train_scale, y_train_scale, X_val_scale, y_val_scale, this_K) for this_K in kwargs['K'])
+                _, _, _, MSE_result[:, counter], _, _ = zip(*temp)
 
         MSE_mean = np.nanmean(MSE_result, axis = 1)
         # Min MSE value (first occurrence)
-        ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
+        ind = np.nanargmin(MSE_mean)
         if kwargs['robust_priority']:
             MSE_std = np.nanstd(MSE_result, axis = 1)
             MSE_min = MSE_mean[ind]
             MSE_bar = MSE_min + MSE_std[ind]
-            ind = np.nonzero( kwargs['K'] == np.nanmin(kwargs['K'][MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
-            ind = ind[0][0]
+            ind = np.nonzero( kwargs['K'] == np.nanmin(kwargs['K'][MSE_mean < MSE_bar]) )[0][0] # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
 
         # Hyperparameter setup
         K = int(kwargs['K'][ind])
         hyperparams = {'K': K}
 
         # Fit the final model
-        PLS_model = PLSRegression(scale = False, n_components = K).fit(X, y)
-        PLS_params = PLS_model.coef_.reshape(-1,1)
+        PLS_model = PLSRegression(K, scale = False, tol = eps).fit(X, y)
+        PLS_params = PLS_model.coef_.squeeze()
         yhat_train = np.dot(X, PLS_params)
         yhat_test = np.dot(X_test, PLS_params)
         mse_train = MSE(yhat_train.flatten(), y.flatten())
@@ -322,9 +269,13 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         if 'trans_type' not in kwargs:
             kwargs['trans_type'] = 'all'
         if 'lag' not in kwargs and 'DALVEN' in model_name:
-            kwargs['lag'] =  [i+1 for i in range(40)]
+            kwargs['lag'] =  [idx+1 for idx in range(20)]
         elif model_name == 'ALVEN':
             kwargs['lag'] = [0]
+        if 'ALVEN_cutoff' not in kwargs:
+            kwargs['ALVEN_cutoff'] = 4e-3
+        if 'ALVEN_interaction' not in kwargs:
+            kwargs['ALVEN_interaction'] = True
 
         # First run for variable selection using a L1_ratio of 1 (that is, only using an L1 penalty)
         kwargs['selection'] = None
@@ -345,8 +296,8 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             else: # Cross-validation
                 MSE_result = np.empty((len(kwargs['degree']) * len(kwargs['alpha']) * len(kwargs['lag']), K_fold*Nr)) * np.nan
                 for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X, y, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
-                    temp = PAR(delayed(_ALVEN_joblib_fun)(X_train, y_train, X_val, y_val, eps, kwargs, counter,
-                            prod_idx, this_prod) for prod_idx, this_prod in enumerate(hyperparam_prod))
+                    temp = PAR(delayed(_ALVEN_joblib_fun)(X_train, y_train, X_val, y_val, eps, kwargs,
+                            prod_idx, this_prod, counter) for prod_idx, this_prod in enumerate(hyperparam_prod))
                     MSE_result[:, counter], _, _ = zip(*temp)
                 # Best hyperparameters for the preliminary run
                 MSE_mean = np.nanmean(MSE_result, axis = 1)
@@ -354,8 +305,8 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         # Run to obtain the coefficients when ALVEN is run with L1_ratio = 1
         degree, l1_ratio, alpha, lag = hyperparam_prod[ind]
         _, ALVEN_params, _, _, _, _, label_names, _ = rm.ALVEN_fitting(X, y, X_test, y_test, alpha, 1, degree, lag, tol = eps,
-                                                trans_type = kwargs['trans_type'], ALVEN_type = kwargs['model_name'], selection = None)
-        kwargs['selection'] = np.abs(ALVEN_params.flatten()) >= 2.4e-3 # TODO: This value could (should?) depend on the "eps" parameter, but I need to learn more about how it works in other models
+                                                trans_type = kwargs['trans_type'], ALVEN_type = kwargs['model_name'], interaction = kwargs['ALVEN_interaction'], selection = None)
+        kwargs['selection'] = np.abs(ALVEN_params) >= kwargs['ALVEN_cutoff']
 
         # Second run with a free L1_ratio but fixed degree and lag
         hyperparam_prod = list(product([degree], kwargs['l1_ratio'], kwargs['alpha'], [lag])) # Degree and lag have been fixed above
@@ -392,45 +343,60 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
 
         # Hyperparameter setup
         degree, l1_ratio, alpha, lag = hyperparam_prod[ind]
-        hyperparams = {'degree': degree, 'l1_ratio': l1_ratio, 'alpha': alpha, 'lag': lag}
+        hyperparams = {'degree': degree, 'l1_ratio': l1_ratio, 'alpha': alpha, 'lag': lag, 'cutoff': kwargs['ALVEN_cutoff']}
         # Final run with the test set and best hyperparameters
         ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, label_names, ICs = rm.ALVEN_fitting(X, y, X_test, y_test, alpha,
-                                                l1_ratio, degree, lag, tol = eps, trans_type = kwargs['trans_type'], ALVEN_type = kwargs['model_name'], selection = kwargs['selection'])
+                                                l1_ratio, degree, lag, tol = eps, trans_type = kwargs['trans_type'], ALVEN_type = kwargs['model_name'], interaction = kwargs['ALVEN_interaction'], selection = kwargs['selection'])
+        label_names = label_names[kwargs['selection']]
         # Unscaling the model coefficients as per stackoverflow.com/questions/23642111/how-to-unscale-the-coefficients-from-an-lmer-model-fitted-with-a-scaled-respon
-        if model_name in {'ALVEN', 'DALVEN'}:
-            X, _, _ = rm._feature_trans(X, degree = degree, trans_type = kwargs['trans_type'])
+        if model_name in {'ALVEN', 'DALVEN'} and X.shape[1] > 0:
+            X, _, _ = rm._feature_trans(X, None, degree, kwargs['ALVEN_interaction'], kwargs['trans_type'])
+        elif model_name in {'ALVEN', 'DALVEN'}: # Just the intercept - that is, an Nx1 vector full of 1; label_names is already taken care of
+            X = np.ones((X.shape[0], 1))
+            X_test = np.ones((X_test.shape[0], 1))
         if model_name in {'DALVEN', 'DALVEN_full_nonlinear'}:
-            not_intercept_idx = 1 if model_name == 'DALVEN' else 0 # We ignore the 1st column because it is the intercept after X goes through _feature_trans()
+            not_intercept_idx = 0 if model_name == 'DALVEN' else 0 # We ignore the 1st column because it is the intercept after X goes through _feature_trans()
             # Lag padding for X
-            XD = X[lag:]
-            XD_test = X_test[lag:]
-            for idx in range(lag): # TODO: there is likely a smart rearrangement that allows this to run without a for-loop, and so without XD
-                XD = np.hstack((XD, X[lag-1-idx : -idx-1, not_intercept_idx:]))
-                XD_test = np.hstack((XD_test, X_test[lag-1-idx : -idx-1, not_intercept_idx:]))
-            # Lag padding for y in design matrix
-            for idx in range(lag):
-                XD = np.hstack((XD, y[lag-1-idx : -idx-1]))
-                XD_test = np.hstack((XD_test, y_test[lag-1-idx : -idx-1]))
-            X = XD.copy() # TODO: see above for removing XD
-            X_test = XD_test.copy()
+            X_temp = np.hstack([X[lag-1-idx : -idx-1, not_intercept_idx:] for idx in range(lag)]) # The additional entries representing the previous times (t-1 to t-lag)
+            y_temp = np.hstack([y[lag-1-idx : -idx-1] for idx in range(lag)])
+            X = np.hstack((X[lag:], X_temp, y_temp))
+            X_test_temp = np.hstack([X_test[lag-1-idx : -idx-1, not_intercept_idx:] for idx in range(lag)])
+            y_test_temp = np.hstack([y_test[lag-1-idx : -idx-1] for idx in range(lag)])
+            X_test = np.hstack((X_test[lag:], X_test_temp, y_test_temp))
             # Shorterning y
             y = y[lag:]
             y_test = y_test[lag:]
         if model_name == 'DALVEN_full_nonlinear':
-            X, _, _ = rm._feature_trans(X, degree = degree, trans_type = kwargs['trans_type'])
-        ALVEN_params_unscaled = (ALVEN_params.squeeze() * y.std() / X[:, kwargs['selection']].std(axis=0))
-        label_names = label_names[kwargs['selection']]
-        # Removing the features that had coefficients equal to zero after the final model selection
-        final_selection = np.abs(ALVEN_params.squeeze()) >= 1e-3 # TODO: again, the eps dependency
+            X, _, _ = rm._feature_trans(X, None, degree, kwargs['ALVEN_interaction'], kwargs['trans_type'])
+        ALVEN_params_unscaled = np.zeros_like(ALVEN_params)
+        y_vars = np.array(['y' in label_names[idx] for idx in range(len(label_names))]) # TODO: should also check for intercept and not unscale it, as intercept unscaling is done below
+        if len(label_names): # if this is false, no variables were selected
+            ALVEN_params_unscaled[~y_vars] = (ALVEN_params[~y_vars] * y.std() / X[:, kwargs['selection']].std(axis=0)[~y_vars]) # Unscaling the X variables
+            ALVEN_params_unscaled[y_vars] = ALVEN_params[y_vars]
+        # Removing the features that had small coefficients after the final model selection
+        final_selection = np.abs(ALVEN_params) >= kwargs['ALVEN_cutoff'] # 2nd clip step
         ALVEN_params_unscaled = ALVEN_params_unscaled[final_selection].reshape(-1) # Reshape to avoid 0D arrays when only one variable is selected
         label_names = label_names[final_selection].reshape(-1)
+        y_vars = np.array(['y' in label_names[idx] for idx in range(len(label_names))])
+        # Intercept manipulations
+        if len(label_names) and label_names[0] == '1': # LCEN selected the intercept among the potential features
+            ALVEN_params_unscaled[0] = y.std()*ALVEN_params[0] + y.mean() - np.dot(ALVEN_params_unscaled, X[:, kwargs['selection']].mean(axis=0)[final_selection])
+        """elif len(label_names) and np.all(~y_vars): # LCEN did not select the intercept among the potential features, but one may exist. # TODO: still need to test this properly
+            mean_diff = y.mean() - np.dot(ALVEN_params_unscaled[~y_vars], X[:, kwargs['selection']].mean(axis=0)[final_selection][~y_vars])
+            scaled_intercept = mean_diff / y.std()
+            if np.abs(scaled_intercept) >= kwargs['ALVEN_cutoff']: # TODO: need to determine the best cutoff value (which could be just 1*kwargs['ALVEN_cutoff']; likely some k*kwargs['ALVEN_cutoff'] for k >~ 1)
+                ALVEN_params_unscaled = np.concatenate(([mean_diff], ALVEN_params_unscaled))
+                label_names = np.concatenate((['1'], label_names))"""
+        # Returning the results
+        print(f'{len(ALVEN_params_unscaled)} variables were selected' + ' '*20)
+        print(f'The validation MSE was {MSE_mean[ind]:.3e}')
         ALVEN_params_unscaled = list(zip(label_names, ALVEN_params_unscaled))
         if 'IC' in cv_type:
             return(hyperparams, ALVEN_model, ALVEN_params_unscaled, mse_train, mse_test, yhat_train, yhat_test, IC_result[ind])
         else:
             return(hyperparams, ALVEN_model, ALVEN_params_unscaled, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
-    elif model_name == 'RF':
+    elif model_name == 'RF': # TODO: modernize the RF code
         if 'max_depth' not in kwargs:
             kwargs['max_depth'] = [2, 3, 5, 10, 15, 20, 40]
         if 'n_estimators' not in kwargs:
@@ -460,7 +426,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             for i in range(len(kwargs['max_depth'])):
                 for j in range(len(kwargs['n_estimators'])):
                     for k in range(len(kwargs['min_samples_leaf'])):
-                        _, _, mse, _, _ = nro.RF_fitting(X_train_scale, y_train_scale, X_val_scale, y_val_scale, kwargs['n_estimators'][j], kwargs['max_depth'][i], kwargs['min_samples_leaf'][k])
+                        _, _, mse, _, _ = rm.RF_fitting(X_train_scale, y_train_scale, X_val_scale, y_val_scale, kwargs['n_estimators'][j], kwargs['max_depth'][i], kwargs['min_samples_leaf'][k])
                         MSE_result[i, j, k, counter] = mse
 
         MSE_mean = np.nanmean(MSE_result, axis = 3)
@@ -483,10 +449,10 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         hyperparams['min_samples_leaf'] = min_samples_leaf
 
         # Fit the final model
-        RF_model, mse_train, mse_test, yhat_train, yhat_test = nro.RF_fitting(X, y, X_test, y_test, n_estimators, max_depth, min_samples_leaf)
+        RF_model, mse_train, mse_test, yhat_train, yhat_test = rm.RF_fitting(X, y, X_test, y_test, n_estimators, max_depth, min_samples_leaf)
         return(hyperparams, RF_model, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
-    elif model_name == 'SVR':
+    elif model_name == 'SVR': # TODO: modernize the SVR code
         if 'C' not in kwargs:
             kwargs['C'] = [0.001, 0.01, 0.1, 1, 10 ,50, 100, 500]
         if 'gamma' not in kwargs:
@@ -517,7 +483,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             for i in range(len(kwargs['C'])):
                 for j in range(len(kwargs['gamma'])):
                     for k in range(len(kwargs['epsilon'])):
-                        _, _, mse, _, _ = nro.SVR_fitting(X_train_scale, y_train_scale, X_val_scale, y_val_scale, kwargs['C'][i], kwargs['epsilon'][k], kwargs['gamma'][j])
+                        _, _, mse, _, _ = rm.SVR_fitting(X_train_scale, y_train_scale, X_val_scale, y_val_scale, kwargs['C'][i], kwargs['epsilon'][k], kwargs['gamma'][j])
                         MSE_result[i, j, k, counter] = mse
 
         MSE_mean = np.nanmean(MSE_result, axis = 3)
@@ -540,7 +506,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         hyperparams['epsilon'] = epsilon
 
         # Fit the final model
-        SVR_model, mse_train, mse_test, yhat_train, yhat_test = nro.SVR_fitting(X, y, X_test, y_test, C, epsilon, gamma)
+        SVR_model, mse_train, mse_test, yhat_train, yhat_test = rm.SVR_fitting(X, y, X_test, y_test, C, epsilon, gamma)
         return(hyperparams, SVR_model, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name in {'MLP', 'RNN'}:
@@ -763,8 +729,8 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         # Re-declaring the model
         model = my_ANN(best_neurons, best_act, X.shape[-1], kwargs['RNN_layers'], kwargs['device']).to(kwargs['device'])
         optimizer = torch.optim.AdamW(model.parameters(), lr = best_LR, weight_decay = kwargs['weight_decay'])
-        if kwargs['scheduler'].casefold() in {'plateau', 'cosine'}:
-            scheduler = CosineScheduler(kwargs['n_epochs']-30, base_lr = best_LR, warmup_steps = 10, final_lr = best_LR/2)
+        if kwargs['scheduler'].casefold() in {'plateau', 'cosine'}: # The plateau scheduler cannot work here because there is no validation loss, so it gets switched for the cosine scheduler
+            scheduler = CosineScheduler(kwargs['n_epochs']-30, base_lr = best_LR, warmup_steps = 10, final_lr = best_LR/16)
         # Retrain
         for epoch in range(kwargs['n_epochs']):
             train_loss, train_pred = loop_model(model, optimizer, train_loader, loss_function, epoch, kwargs['batch_size'], categorical = kwargs['use_cross_entropy'])
@@ -777,62 +743,18 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         test_loss, test_pred = loop_model(model, optimizer, test_loader, loss_function, epoch, kwargs['batch_size'], evaluation = True, categorical = kwargs['use_cross_entropy'])
         return model, final_val_loss, train_loss, test_loss, np.array(train_pred, dtype = float), np.array(test_pred, dtype = float), (str(best_neurons), best_LR, best_act) # Converting to float to save as JSON in SPA.py
 
-        # Old stuff, changes / updates TODO
-        """
-        if 'IC' in cv_type: # Information criterion
-            IC_result = np.zeros( (len(kwargs['activation']), len(kwargs['MLP_layers']), len(kwargs['learning_rate'])) )
-            for i in range(len(kwargs['cell_type'])):
-                for j in range(len(kwargs['activation'])):
-                    for k in range(len(kwargs['RNN_layers'])):
-                        _, _, _, (AIC,AICc,BIC), _, _, _ = RNN.timeseries_RNN_feedback_single_train(X, y, X_val, y_val, None, None, kwargs['val_ratio'], kwargs['cell_type'][i],
-                                    kwargs['activation'][j], kwargs['RNN_layers'][k], kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'],
-                                    kwargs['lambda_l2_reg'], kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test,
-                                    output_prob_test, state_prob_test, kwargs['max_checks_without_progress'], kwargs['epoch_before_val'], kwargs['save_location'], plot = False)
-                        if cv_type == 'AICc':
-                            IC_result[i,j,k] = AICc
-                        elif cv_type == 'BIC':
-                            IC_result[i,j,k] = BIC
-                        else:
-                            IC_result[i,j,k] = AIC
-            # Min IC value (first occurrence)
-            ind = np.unravel_index(np.argmin(IC_result, axis=None), IC_result.shape)
-
-        # Hyperparameter setup
-        cell_type = kwargs['cell_type'][ind[0]]
-        activation = kwargs['activation'][ind[1]]
-        RNN_layers = kwargs['RNN_layers'][ind[2]]
-
-        prediction_train, prediction_val, prediction_test, _, train_loss_final, val_loss_final, test_loss_final = RNN.timeseries_RNN_feedback_single_train(X, y, None, None, X_test, y_test,
-                kwargs['val_ratio'], cell_type, activation, RNN_layers, kwargs['batch_size'], kwargs['epoch_overlap'], kwargs['num_steps'], kwargs['learning_rate'], kwargs['lambda_l2_reg'],
-                kwargs['num_epochs'], kwargs['input_prob'], kwargs['output_prob'], kwargs['state_prob'], input_prob_test, output_prob_test, state_prob_test, kwargs['max_checks_without_progress'],
-                kwargs['epoch_before_val'], kwargs['save_location'], kwargs['plot'])
-
-        hyperparams = {}
-        hyperparams['cell_type'] = cell_type
-        hyperparams['activation'] = activation
-        hyperparams['RNN_layers'] = RNN_layers
-        hyperparams['training_params'] = {'batch_size': kwargs['batch_size'], 'epoch_overlap': kwargs['epoch_overlap'], 'num_steps': kwargs['num_steps'], 'learning_rate': kwargs['learning_rate'],
-                                        'lambda_l2_reg': kwargs['lambda_l2_reg'], 'num_epochs': kwargs['num_epochs']}
-        hyperparams['drop_out'] = {'input_prob': kwargs['input_prob'], 'output_prob': kwargs['output_prob'], 'state_prob': kwargs['state_prob']}
-        hyperparams['early_stop'] = {'val_ratio': kwargs['val_ratio'], 'max_checks_without_progress': kwargs['max_checks_without_progress'], 'epoch_before_val': kwargs['epoch_before_val']}
-        if 'IC' in cv_type:
-            hyperparams['IC_optimal'] = IC_result[ind]
-        else:
-            hyperparams['MSE_val'] = MSE_mean[ind]
-        return(hyperparams, kwargs['save_location'], prediction_train, prediction_val, prediction_test, train_loss_final, val_loss_final, test_loss_final)"""
-
 @ignore_warnings()
 def _ALVEN_joblib_fun(X_train, y_train, X_val, y_val, eps, kwargs, prod_idx, this_prod, counter = -1):
     """
     A helper function to parallelize ALVEN. Shouldn't be called by the user
     """
     degree, l1_ratio, alpha, lag = this_prod
-    if (prod_idx == 0 or not (prod_idx+1)%200) and counter >= 0: # CV
+    if (prod_idx == 0 or not (prod_idx+1)%100) and counter >= 0: # CV
         print(f'Beginning run {prod_idx+1:4} of fold {counter+1:3}', end = '\r')
-    elif prod_idx == 0 or not (prod_idx+1)%200: # IC -- no folds
+    elif prod_idx == 0 or not (prod_idx+1)%100: # IC -- no folds
         print(f'Beginning run {prod_idx+1:4}', end = '\r')
     _, variable, _, mse, _, _, _, ICs = rm.ALVEN_fitting(X_train, y_train, X_val, y_val, alpha, l1_ratio, degree, lag,
-                                tol = eps, trans_type = kwargs['trans_type'], ALVEN_type = kwargs['model_name'], selection = kwargs['selection'])
+                                tol = eps, trans_type = kwargs['trans_type'], ALVEN_type = kwargs['model_name'], interaction = kwargs['ALVEN_interaction'], selection = kwargs['selection'])
     return mse, np.sum(variable.flatten() != 0), ICs
 
 class MyDataset(Dataset):
@@ -921,14 +843,14 @@ class my_ANN(torch.nn.Module):
 
         # LSTM cell
         if isinstance(lstm_hidden_size, int) and lstm_hidden_size:
-            self.lstm = [torch.nn.LSTM(lstm_input_size, lstm_hidden_size, batch_first=True, bidirectional=True).to(device)] # Need to send to device because the cells are in a list
+            self.lstm = [torch.nn.LSTM(lstm_input_size, lstm_hidden_size, batch_first = True, bidirectional = True).to(device)] # Need to send to device because the cells are in a list
         elif isinstance(lstm_hidden_size, (list, tuple)):
             self.lstm = []
             for idx, size in enumerate(lstm_hidden_size):
                 if idx == 0:
-                    self.lstm.append(torch.nn.LSTM(lstm_input_size, size, batch_first=True, bidirectional=True).to(device)) # Need to send to device because the cells are in a list
+                    self.lstm.append(torch.nn.LSTM(lstm_input_size, size, batch_first = True, bidirectional = True).to(device)) # Need to send to device because the cells are in a list
                 else:
-                    self.lstm.append(torch.nn.LSTM(lstm_hidden_size[idx-1], size, batch_first=True, bidirectional=True).to(device)) # Need to send to device because the cells are in a list
+                    self.lstm.append(torch.nn.LSTM(lstm_hidden_size[idx-1], size, batch_first = True, bidirectional = True).to(device)) # Need to send to device because the cells are in a list
         self.lstm = torch.nn.ModuleList(self.lstm) # Need to transform list into a ModuleList so PyTorch updates and interacts with the weights properly
         # Transforming layers list into OrderedDict with layers + activation
         mylist = list()
