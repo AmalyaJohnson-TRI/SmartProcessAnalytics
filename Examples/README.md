@@ -1,6 +1,6 @@
 # Examples
 
-There are many ways to call SPA for automatic model training and testing. The simplest is to just input the path to training data (or perhaps two paths, one to training and the other to test data). SPA will automatically select a suitable cross-validation method and model architecture, then automatically cross-validate a combination of standard hyperparameters for that model architecture. It is possible to customize the process; some examples are shown below, but checking the documentation of `main_SPA()` (in the [SPA](../Code-SPA/SPA.py) file) is a good idea.
+There are many ways to call SPA for automatic model training and testing. The simplest is to just input the path to training data (or perhaps two paths, one to training and the other to test data). SPA will automatically select a suitable cross-validation method and model architecture, then automatically cross-validate a combination of standard hyperparameters for that model architecture. It is possible to customize the process; some examples are shown below, but checking the documentation of `main_SPA()` (in the [SPA.py](../Code-SPA/SPA.py) file) is a good idea.
 
 ## Simplest use case; no testing data
 `import SPA; _ = SPA.main_SPA('poly_1000x5-data_1to10-range_1-degree_123456789-seed_(0,0)-noise.csv')`
@@ -21,6 +21,8 @@ There are many ways to call SPA for automatic model training and testing. The si
 `import SPA; _ = SPA.main_SPA('poly_1000x5-data_1to10-range_1-degree_123456789-seed_(0,0)-noise.csv', plot_interrogation = True)`
 
 Note that all of the examples above do not pass a path to testing data (using the `test_data` keyword). In reality, it is essential to have independent testing data to properly evaluate a model. SPA properly isolates the testing set from the models while cross-validation occurs, and reports the testing results in the output files.
+
+Sample artificial datasets may be created with the [create_random_data.py](create_random_data.py) file. A comparison between LCEN and the ALVEN algorithms using artificial data is available in the [SPA_paper_comparison.py](SPA_paper_comparison.py) file.
 
 # Sample datasets
 
