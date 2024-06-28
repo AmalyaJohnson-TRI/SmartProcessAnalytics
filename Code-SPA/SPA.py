@@ -20,13 +20,15 @@ warnings.filterwarnings('ignore', category = ConvergenceWarning)
 warnings.filterwarnings('ignore', category = RuntimeWarning)
 
 def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None, scale_X = True, scale_y = True, interpretable = False, continuity = False,
-            group_name = None, spectral_data = False, plot_interrogation = False, enough_data = False, nested_cv = False, robust_priority = False,
-            dynamic_model = False, lag = list(range(20)), significance = 0.05, cat = None, xticks = None, yticks = ['y'], model_name = None, cv_method = None, K_fold = 5, Nr = 10,
-            degree = [1, 2, 3], num_outer = 10, K_steps = 1, l1_ratio = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99], alpha = 20, trans_type = 'all',
-            ALVEN_cutoff = 4e-3, ALVEN_interaction = True, activation = ['relu'], MLP_layers = None, RNN_layers = None, batch_size = 32, learning_rate = [1e-2, 5e-3], weight_decay = 0,
-            n_epochs = 100, class_loss = None, scheduler = 'plateau', scheduler_mode = 'min', scheduler_factor = 0.5, scheduler_patience = 10, scheduler_min_LR = None,
-            scheduler_last_epoch = None, scheduler_warmup = 10, val_loss_file = None, expand_hyperparameter_search = False, maxorder = 10, ADAPTx_path = None,
-            ADAPTx_save_path = None, ADAPTx_max_lag = 12, ADAPTx_degrees = [-1, 0, 1]):
+            group_name = None, spectral_data = False, plot_interrogation = False, nested_cv = False, robust_priority = False, dynamic_model = False, lag = [0],
+            min_lag = 0, significance = 0.05, cat = None, xticks = None, yticks = ['y'], model_name = None, cv_method = None, K_fold = 5, Nr = 10, num_outer = 10,
+            l1_ratio = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99], alpha = 20, degree = [1, 2, 3], trans_type = 'all', LCEN_cutoff = 4e-2,
+            LCEN_interaction = True, LCEN_transform_y = False, RF_n_estimators = [10, 25, 50, 100, 200, 300], RF_max_depth = [2, 3, 5, 10, 15, 20, 40],
+            RF_min_samples_leaf = [0.001, 0.01, 0.02, 0.05, 0.1], RF_n_features = [0.1, 0.25, 0.333, 0.5, 0.667, 0.75, 1.0], SVM_gamma = None,
+            SVM_C = [0.001, 0.01, 0.1, 1, 10, 50, 100, 500], SVM_epsilon = [0.01, 0.02, 0.03, 0.05, 0.08, 0.09, 0.1, 0.15, 0.2, 0.3], activation = ['relu'],
+            MLP_layers = None, RNN_layers = None, batch_size = 32, learning_rate = [1e-2, 5e-3], weight_decay = 0, l1_penalty_factor = 0, n_epochs = 100,
+            class_weight = None, scheduler = 'plateau', scheduler_mode = 'min', scheduler_factor = 0.5, scheduler_patience = 10, scheduler_min_LR = 1/16,
+            scheduler_last_epoch = None, scheduler_warmup = 10, val_loss_file = None, expand_hyperparameter_search = False, verbosity_level = 2):
     """
     The main SPA function, which calls all other functions needed for model building.
 
@@ -66,19 +68,26 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
         Note spectral data force the use of linear models.
     plot_interrogation : boolean, optional, default = False
         Whether SPA should generate plots of the data interrogation results. 
-    enough_data : boolean, optional, default = False
-        Whether you believe you have enough data to capture the complexities of your system.
     nested_cv : boolean, optional, default = False
         Whether to used nested cross-validation.
-        Relevant only when enough_data == False.
+        Nested CV runs CV multiple times, each time using a different part of the set for final testing.
+        This increases the selected model's robustness but requires much more time for validation.
     robust_priority : boolean, optional, default = False
-        Whether to prioritize robustness over accuracy.
-        Relevant only when enough_data == False.
+        If True, the selected model will be the model with the lowest number of features ...
+            within one stdev of the model with the lowest validation MSE.
+        If False (default), the model with the lowest validation MSE is selected.
     dynamic_model : boolean, optional, default = False
         Whether to use a dynamic model.
     lag : list of integers, optional, default = [0]
-        The lag used when assessing nonlinear dynamics.
-        Relevant only when dynamic_model == True.
+        The lag used when running an autoregressive LCEN.
+        Relevant only when dynamic_model == True or model_name == 'LCEN'.
+        For correct results, lag should be increased by min_lag (see below).
+    min_lag : integer, optional, default = 0
+        The minimum lag used in autoregressive LCEN. Should be smaller than the smallest lag.
+        Useful when making N-points ahead predictions, in which case min_lag should be set to N-1 and ...
+            each entry in lag should be increased by N-1.
+            (e.g.: the default min_lag = 0 is used to make predictions 1 point ahead; a min_lag = 5 is
+            used to make predictions 6 points ahead, ignoring the first 5 points ahead when training.)
     significance : float, optional, default = 0.05
         Significance level when doing statistical tests
     cat : list of int or None, optional, default = None
@@ -91,9 +100,9 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
         A single name to label the y variable in plots generated by SPA.
     model_name : list of str or None, optional, default = None
         The name of the model(s) you want SPA to evaluate.
-        Each entry must be in {'OLS', 'ALVEN', 'SVR', 'RF', 'EN', 'SPLS', 'PLS', ...
-            'DALVEN', 'DALVEN_full_nonlinear', 'MLP', 'RNN', 'SS'}.
-        If None, SPA determines which models are viable based on the data.
+        Each entry must be in {'OLS', 'LCEN', 'SVM', 'RF', 'GBDT', 'AdaB', 'EN', 'SPLS', 'PLS', ...
+            'MLP', 'RNN'}.
+        If None, SPA determines which model architectures are viable based on the data.
     cv_method : str or None, optional, default = None
         Which cross validation method to use.
         Each entry must be in {'Single', 'KFold', 'MC', 'Re_KFold'} when dynamic_model == False ...
@@ -102,34 +111,59 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
         Number of folds used in cross validation.
     Nr : int, optional, default = 10
         Number of CV repetitions used when cv_method in {'MC', 'Re_KFold', 'GroupShuffleSplit'}.
-    degree : list of int, optional, default = [1, 2, 3]
-        The maximum degree of the X data transforms.
-        Relevant only when model_name in {'ALVEN', 'DALVEN', 'DALVEN_full_nonlinear'}
     num_outer : int, optional, default = 10
         Number of outer loops used in nested CV.
         Relevant only when nested_cv == True.
-    K_steps : int, optional, default = 1
-        Number of future steps for training and test predictions.
-        Relevant only when model_name == 'SS'.
     l1_ratio : list of floats, optional, default = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99]
         Ratio of L1 penalty to total penalty. When l1_ratio == 1, only the L1 penalty is used.
-        Relevant only when model_name in {'EN', 'ALVEN', 'DALVEN', 'DALVEN_full_nonlinear'}
+        Relevant only when at least one of {'EN', 'LCEN'} is in model_name
     alpha : int or list of floats, optional, default = 20
-        The weight of the L1 or L2 regularizations used when model_name in {'EN', 'ALVEN', 'DALVEN', 'DALVEN_full_nonlinear'}.
+        The weight of the L1 or L2 regularizations used when at least one of {'EN', 'LCEN'} is in model_name
         The regularization term is alpha*l1_ratio*||w||_1 + 0.5*alpha*(1 - l1_ratio)*||w||^2_2 or alpha*||w||^2_2
         If int, a list of alpha+1 values equal to np.concatenate(([0], np.logspace(-4.3, 0, kwargs['alpha']))) is generated
+    degree : list of int, optional, default = [1, 2, 3]
+        The maximum degree of the X data transforms for the LCEN algorithm.
+        Relevant only when 'LCEN' is in model_name
     trans_type : str in {'all', 'poly', 'simple_interaction'}, optional, default == 'all'
         Whether to include all transforms (polynomial, log, sqrt, and inverse), only polynomial transforms (and, ...
             optionally, interactions), or just interactions.
         The log, sqrt, and inverse terms never include interactions among the same transform type (such as ln(x1)*ln(x4)), but ...
             include some interactions among each other for the same variable (such as ln(x0)*1/x0, x0*sqrt(x0), etc.).
-    ALVEN_cutoff : float, optional, default = 4e-3
-        The minimum absolute value a scaled coefficient needs to have to not be removed by the clip step of the LCEN algorithm
-        Relevant only when model_name in {'ALVEN', 'DALVEN', 'DALVEN_full_nonlinear'}
-    ALVEN_interaction : bool, optional, default = True
-        Whether to also include interactions between different variables (such as x1*x3 or x0*x5^2)
+    LCEN_cutoff : float, optional, default = 4e-2
+        The minimum absolute value a scaled coefficient needs to have to not be removed by the clip steps of the LCEN algorithm
+        Relevant only when 'LCEN' is in model_name
+    LCEN_interaction : bool, optional, default = True
+        Whether to also include interactions between different variables (such as x1*x3 or x0*x5^2) in the transformed features.
         Note that, if trans_type == 'simple_interaction', this variable must be set to True
-        Relevant only when model_name in {'ALVEN', 'DALVEN', 'DALVEN_full_nonlinear'}
+        Relevant only when 'LCEN' is in model_name
+    LCEN_transform_y : bool, optional, default = False
+        Whether to also perform nonlinear transforms on the y variable.
+        Relevant only when 'LCEN' in model_name and lag > 0.
+    RF_n_estimators : list of integers, optional, default = [10, 25, 50, 100, 200, 300]
+        The number of trees in the random forest.
+        Relevant only when 'RF' in model_name.
+    RF_max_depth : list of integers, optional, default = [2, 3, 5, 10, 15, 20, 40]
+        The maximum depth of each tree.
+        Relevant only when 'RF' in model_name.
+    RF_min_samples_leaf : list of floats between 0 and 1, optional, default = [0.001, 0.01, 0.02, 0.05, 0.1]
+        The minimum fraction of samples that must be available for each leaf when splitting at a node.
+        Relevant only when 'RF' in model_name
+    RF_n_features : list of floats between 0 and 1, optional, default = [0.1, 0.25, 0.333, 0.5, 0.667, 0.75, 1.0]
+        The fraction of features available for each tree. Increasing this value makes each individual tree more powerful, ...
+            but also makes the trees more correlated with each other.
+        Relevant only when 'RF' in model_name.
+    SVM_gamma : list of floats >= 0 or str in {'scale', 'auto'}, optional, default = None
+        Kernel coefficient for the 'rbf', 'poly', and 'sigmoid' kernels
+        If 'scale', gamma = 1 / (X.shape[1] * X.var())
+        If 'auto', gamma = 1 / X.shape[1]
+        If None, gamma = (1 / X.shape[1]) * [1/50, 1/10, 1/5, 1/2, 1, 2, 5, 10, 50]
+        Relevant only when 'SVM' in model_name.
+    SVM_C : list of floats > 0, optional, default = [0.001, 0.01, 0.1, 1, 10, 50, 100, 500]
+        Parameter inversely proportional to the strength of the regularization.
+        Relevant only when 'SVM' in model_name.
+    SVM_epsilon : list of floats >= 0, optional, default = [0.01, 0.02, 0.03, 0.05, 0.08, 0.09, 0.1, 0.15, 0.2, 0.3]
+        Epsilon-tube within which no penalty is associated in the training loss function.
+        Relevant only when 'SVM' in model_name.
     activation : list of str, optional, default = ['relu']
         The activation function(s) used to build ANNs. Each entry must be in {'relu', 'tanh', 'sigmoid', 'tanhshrink', 'selu'}.
         If multiple values, all are cross-validated and the best is selected.
@@ -145,10 +179,12 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
     batch_size : int, optional, default = 32
         The batch size used when training ANNs.
     learning_rate : array of floats, optional, default = [1e-2, 5e-3]
-        The learning rate (LR) used when training ANNs.
-    weight_decay : float, optional, default = 0
+        The learning rate (LR) used when training GBDTs or ANNs.
+    weight_decay : float >= 0, optional, default = 0
         Weight penalty used with the AdamW optimizer when training ANNs.
         Equivalent to L2 regularization.
+    l1_penalty_factor : float >= 0, optional, default = 0
+        The penalty factor that multiplies the group L1 norm when training ANNs.
     n_epochs : int, optional, default = 100
         The number of ANN training epochs.
     class_weight : array, optional, default = None
@@ -168,12 +204,13 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
     scheduler_patience : integer or list of integers, optional, default = 10
         For the plateau and step schedulers, an integer representing how many epochs must pass before another reduction in LR.
         For the multistep scheduler, a list of integers. LR will be reduced when epoch == each entry of that list.
-    scheduler_min_lr : float, optional, default = None
-        The lowest LR value the scheduler may set.
-        If None, is set to initial_LR / 16
+    scheduler_min_lr : float < 1, optional, default = 1/16
+        The lowest LR value the scheduler may set based on a fraction of the starting LR value.
+        For example, if scheduler_min_lr is 0.2 and the starting LR is 0.05, the minimum LR would be 0.01.
     scheduler_last_epoch : integer, optional, default = None
         For the cosine scheduler, the last epoch with a LR reduction.
-        If None, is set to n_epochs - 30
+        If None, is set to n_epochs - 30.
+        If a negative value, is set to n_epochs - value.
     scheduler_warmup : integer, optional, default = 10:
         For the cosine scheduler, the warmup period in epochs.
         During warmup, the LR starts at 0 and increases linearly to the specified LR.
@@ -189,21 +226,13 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
             a smaller LR with ALL layer configurations, while 'single' would do the same with only the best layer configuration.
             If the best hyperparameters are the largest layer configuration and an intermediate LR, 'grid' would test a ...
             larger layer configuration with ALL LR values, while 'single' would do the same with only the best LR value.
-    maxorder : int, optional, default = 10
-        The maximum state space order used.
-        Relevant only when dynamic_model == True and the data are linear. 
-    ADAPTx_path : string, optional, default = None
-        The path to ADAPTx.
-        Relevant only when dynamic_model == True and the data are linear. 
-    ADAPTx_save_path : string, optional, default = None
-        The path where ADAPTx results will be saved.
-        Relevant only when ADAPTx_path is not None.
-    ADAPTx_max_lag : int, optional, default = 12
-        Maximum number of lags considered during ADAPTx's CVA.
-        Relevant only when ADAPTx_path is not None.
-    ADAPTx_degrees : list of int, optional, default = [-1, 0, 1]
-        Degrees of trend t in ADAPTx
-        Relevant only when ADAPTx_path is not None.
+    verbosity_level : int >= 0, optional, default = 2
+        An interger representing how verbose SPA should be.
+        0: Nothing at all is printed (not recommended).
+        1: Only the test set results of the final model, what choices SPA made automatically, and what model is currently being trained are printed.
+        2: All in level 1 and progress on the current training (such as CV folds for most models) are printed. [Default]
+        3: All in level 2 and additional progress on the current training for MLPs and RNNs, final feature selection information for LCEN, and nested validation progress. Equal to 2 if these model architectures or nested validation is not used.
+        4: All in level 3 and progress on each epoch of training for MLPs and RNNs. Equal to 2 if these model architectures are not used.
     """
     # Loading group (the actual data) from group_name (a path)
     if group_name:
@@ -252,74 +281,80 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
         multicollinear = collinearity_assess(X_original, y_original, plot_interrogation, xticks, yticks)
         if not nonlinear and dynamic_model:
             nonlinear = nonlinearity_assess_dynamic(X_original, y_original, plot_interrogation, alpha = significance, difference = 0.4, xticks = xticks, yticks = yticks, lag = max(lag))
-
+        # Automatically selecting a model based on the nonlinear and multicollinear test results
         if nonlinear:
+            model_name = ['LCEN'] # Used no matter whether the system is dynamic or not, as the lag hyperparameter takes care of the dynamics
             # Nonlinear, nondynamic models
             if not dynamic_model:
-                model_name = ['ALVEN']
-                if not enough_data or interpretable:
-                    print(f'As your data are nonlinear and {"limited"*(not enough_data)}{", and "*(not(enough_data) and interpretable)}{"you require an interpretable model"*interpretable}, only ALVEN will be used.')
+                lag, min_lag = [0], 0
+                if interpretable:
+                    if verbosity_level: print('As your data are nonlinear and you require an interpretable model, only LCEN will be used.')
                 elif continuity:
-                    print('As you have enough data, do not require the model to be interpretable, and require continuity, ALVEN, SVR, and MLP will be tested')
-                    model_name.append('SVR')
+                    if verbosity_level: print('As your data are nonlinear, you do not require the model to be interpretable, and you require continuity, LCEN, SVM, and MLP will be tested')
+                    model_name.append('SVM')
                     model_name.append('MLP')
                 else:
-                    print('As your data are nonlinear, you have enough data, do not require the model to be interpretable, and do not require continuity, ALVEN, SVR, MLP, and RF will be tested')
-                    model_name.append('SVR')
+                    if verbosity_level: print('As your data are nonlinear, you do not require the model to be interpretable, and you do not require continuity, LCEN, SVM, MLP, RF, and AdaBoost will be tested')
+                    model_name.append('SVM')
                     model_name.append('MLP')
                     model_name.append('RF')
+                    model_name.append('AdaB')
             # Nonlinear, dynamic models
-            elif not enough_data or interpretable:
-                print(f'As your data are nonlinear{" and"*(enough_data)+","*(not enough_data)} dynamic, and {"limited"*(not enough_data)}{", and "*(not(enough_data) and interpretable)}{"you require an interpretable model"*interpretable}, DALVEN will be used.')
-                model_name = ['DALVEN']
             else:
-                print('As you have enough data and do not require the model to be interpretable, an RNN will be used.')
-                model_name = ['RNN']
+                if lag == [0]:
+                    lag = list(range(1+min_lag, 6+min_lag))
+                if interpretable:
+                    if verbosity_level: print(f'As your data are nonlinear and you require an interpretable model, LCEN with lag = {lag} will be used.')
+                else:
+                    if verbosity_level: print(f'As your data are nonlinear and you do not require the model to be interpretable, LCEN with lag = {lag} and an RNN will be used.')
+                    model_name.append('RNN')
         # Linear, nondynamic models
         elif not dynamic_model:
+            lag, min_lag = [0], 0
+            degree = [1]
             if not multicollinear:
-                print('As there is no significant nonlinearity and multicollinearity in the data, OLS will be used.')
+                if verbosity_level: print('As there is no significant nonlinearity and multicollinearity in the data, OLS will be used.')
                 model_name = ['OLS']
             elif spectral_data:
-                print('As you have spectral data, EN with L1_ratio = 0 (Ridge regression) and PLS will be used.')
+                if verbosity_level: print('As you have spectral data, EN with L1_ratio = 0 (Ridge regression) and PLS will be used.')
                 model_name = ['EN','PLS']
                 l1_ratio = [0]
             elif interpretable:
-                print('As you require an interpretable model, EN and SPLS will be used.')
-                model_name = ['EN','SPLS']
+                if verbosity_level: print('As you require an interpretable model, EN, SPLS, and LCEN with degree = 1 will be used.')
+                model_name = ['EN', 'SPLS', 'LCEN']
             else:
-                print('As your data have significant multicollinearity and you do not require an interpretable model, EN, SPLS, and PLS will be used.')
-                model_name = ['EN','SPLS','PLS']
+                if verbosity_level: print('As your data have significant multicollinearity and you do not require an interpretable model, EN, SPLS, PLS, and LCEN with degree = 1 will be used.')
+                model_name = ['EN', 'SPLS', 'PLS', 'LCEN']
         # Linear dynamic models
         else:
-            print('As your data have significant dynamics but are linear, DALVEN (with degree 1) and SS will be used.') # Originally CVA, SSARX, and MOSEP
-            model_name = ['DALVEN', 'SS']
+            if lag == [0]:
+                lag = list(range(1+min_lag, 6+min_lag))
             degree = [1]
             trans_type = 'poly'
+            if verbosity_level: print(f'As your data have significant dynamics but are linear, LCEN with degree = 1 and lag = {lag} will be used.')
+            model_name = ['LCEN']
 
     # Cross-Validation Strategy
     if cv_method is None:
         if not dynamic_model and group_name is None:
             cv_method = 'Re_KFold'
-            print(f'{"Nested "*nested_cv}CV with repeated KFold in inner loop {"and one-std rule "*robust_priority}will be used.')
+            if verbosity_level: print(f'{"Nested "*nested_cv}CV with repeated KFold in inner loop {"and one-std rule "*robust_priority}will be used.')
         elif not dynamic_model:
             cv_method = 'GroupKFold'
-            print(f'{"Nested "*nested_cv}GroupKFold {"with one-std rule "*robust_priority}will be used.')
+            if verbosity_level: print(f'{"Nested "*nested_cv}GroupKFold {"with one-std rule "*robust_priority}will be used.')
         # Dynamic models
-        elif model_name == ['SS']:
-            print('MATLAB/ADAPTx packges with information criterion will be used.')
         elif nested_cv:
             cv_method = 'Timeseries'
-            print(f'Cross-validation for time series {"with one-std rule "*robust_priority}will be used.')
+            if verbosity_level: print(f'Cross-validation for time series {"with one-std rule "*robust_priority}will be used.')
         elif robust_priority:
             cv_method = 'BIC'
-            print('BIC (Bayesian information criterion) will be used.')
+            if verbosity_level: print('BIC (Bayesian information criterion) will be used.')
         else:
             cv_method = 'AICc'
-            print('AICc (Akaike information criterion) will be used.')
+            if verbosity_level: print('AICc (Akaike information criterion with correction) will be used.')
 
     # Preprocessing the data
-    X = X_original.copy('F') # Switching to Fortran order to speed up Elastic Net (and ALVEN) [but does not make any significant difference]
+    X = X_original.copy('F') # Switching to Fortran order to speed up Elastic Net (and LCEN) [but does not make any significant difference]
     y = y_original.copy('F')
     # Scaling the data
     if scale_X and len(X.shape) == 2: # StandardScaler doesn't work with 3D arrays
@@ -362,50 +397,51 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
         from regression_models import OLS_fitting
         final_model, model_params, mse_train, mse_test, yhat_train, yhat_test = OLS_fitting(X_scale, y_scale, X_test_scale, y_test_scale)
         fitting_result['OLS'] = {'final_model': final_model, 'model_params': model_params, 'mse_train': mse_train, 'mse_test': mse_test, 'yhat_train': yhat_train, 'yhat_test': yhat_test}
-        selected_model = 'OLS'
-    # Non-dynamic models
-    if any(temp_model in model_name for temp_model in {'ALVEN', 'SVR', 'RF', 'EN', 'PLS', 'SPLS', 'MLP'}) and 'OLS' not in model_name: # TODO: how do we compare OLS with the other models if OLS doesn't have validation scores?
-        # Static / traditional CV
-        if not nested_cv:
-            temp_fitting_result = {}
+    else: # TODO: how do we compare OLS with the other models if OLS doesn't have validation scores?
+        if not nested_cv: # Static / traditional CV
             for index, this_model in enumerate(model_name):
-                if this_model in {'ALVEN', 'SVR', 'RF', 'EN', 'PLS', 'SPLS'}: # There may be other models if the user passed model_name manually
-                    print(f'Running model {this_model}', end = '\r')
-                    fitting_result[this_model], _ = run_cv_ML(this_model, X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale,
-                            cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type, ALVEN_cutoff, ALVEN_interaction)
-                    print(f'Completed model {this_model}')
-                elif this_model == 'MLP': # There may be other models if the user passed model_name manually
+                if this_model in {'LCEN', 'SVM', 'RF', 'GBDT', 'AdaB', 'EN', 'PLS', 'SPLS'}: # There may be other models if the user passed model_name manually
+                    if verbosity_level >= 2: print(f'Running model {this_model}', end = '\r')
+                    fitting_result[this_model], _ = run_cv_ML(this_model, X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale, cv_method, group,
+                                                K_fold, Nr, alpha, l1_ratio, lag, min_lag, robust_priority, degree, trans_type, LCEN_cutoff, LCEN_interaction, LCEN_transform_y,
+                                                RF_n_estimators, RF_max_depth, RF_min_samples_leaf, RF_n_features, learning_rate, SVM_gamma, SVM_C, SVM_epsilon, verbosity_level)
+                    if verbosity_level: print(f'Completed model {this_model}')
+                elif this_model in {'MLP', 'RNN'}: # There may be other models if the user passed model_name manually
                     temp = cv.CV_mse(this_model, X_scale, y_scale, X_test_scale, y_test_scale, X, y, cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr,
-                        scale_X = scale_X, scale_y = scale_y, use_cross_entropy = use_cross_entropy, activation = activation, MLP_layers = MLP_layers,
-                        batch_size = batch_size, learning_rate = learning_rate, weight_decay = weight_decay, n_epochs = n_epochs, val_loss_file = val_loss_file,
-                        expand_hyperparameter_search = expand_hyperparameter_search)
+                        scale_X = scale_X, scale_y = scale_y, use_cross_entropy = use_cross_entropy, activation = activation, MLP_layers = MLP_layers, RNN_layers = RNN_layers,
+                        batch_size = batch_size, learning_rate = learning_rate, weight_decay = weight_decay, l1_penalty_factor = l1_penalty_factor, n_epochs = n_epochs,
+                        class_weight = class_weight, scheduler = scheduler, scheduler_mode = scheduler_mode, scheduler_factor = scheduler_factor,
+                        scheduler_patience = scheduler_patience, scheduler_last_epoch = scheduler_last_epoch, scheduler_warmup = scheduler_warmup,
+                        val_loss_file = val_loss_file, expand_hyperparameter_search = expand_hyperparameter_search, verbosity_level = verbosity_level)
                     fitting_result[this_model] = {'final_model': temp[0], 'mse_train': temp[2], 'mse_val': temp[1].min().min(), 'mse_test': temp[3],
                                                   'best_hyperparameters': temp[6], 'yhat_train': temp[4], 'yhat_test': temp[5]}
-                    print('Completed model MLP' + ' '*15)
+                    if verbosity_level: print(f'Completed model {this_model}' + ' '*15)
 
         else: # Nested CV
             if group_name is None:
                 from sklearn.model_selection import train_test_split
                 MSE_val = np.empty((len(model_name), num_outer)) * np.nan
                 for index_out in range(num_outer):
-                    print(f'Beginning nested CV loop {index_out+1} out of {num_outer}', end = '\r')
+                    if verbosity_level >= 3: print(f'Beginning nested CV loop {index_out+1} out of {num_outer}', end = '\r')
                     X_nest, X_nest_val, y_nest, y_nest_val = train_test_split(X, y, test_size = 1/K_fold, random_state = index_out)
                     X_nest_scale, X_nest_scale_val, y_nest_scale, y_nest_scale_val = train_test_split(X_scale, y_scale, test_size = 1/K_fold, random_state = index_out)
                     for index, this_model in enumerate(model_name):
-                        if this_model in {'ALVEN', 'SVR', 'RF', 'EN', 'PLS', 'SPLS'}: # There may be other models if the user passed model_name manually
+                        if this_model in {'LCEN', 'SVM', 'RF', 'GBDT', 'AdaB', 'EN', 'PLS', 'SPLS'}: # There may be other models if the user passed model_name manually
                             MSE_val[index, index_out] = run_cv_ML(this_model, X_nest, y_nest, X_nest_scale, y_nest_scale, X_nest_val, y_nest_val, X_nest_scale_val,
-                                    y_nest_scale_val, cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type, ALVEN_cutoff, ALVEN_interaction, True)
+                                    y_nest_scale_val, cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, min_lag, robust_priority, degree, trans_type, LCEN_cutoff, LCEN_transform_y,
+                                    LCEN_interaction, RF_n_estimators, RF_max_depth, RF_min_samples_leaf, RF_n_features, learning_rate, SVM_gamma, SVM_C, SVM_epsilon, verbosity_level, True)
             else:
                 from sklearn.model_selection import LeaveOneGroupOut
                 MSE_val = np.empty((len(model_name), len(np.unique(group)))) * np.nan
                 RMSE_val = np.empty((len(model_name), len(np.unique(group)))) * np.nan
                 logo = LeaveOneGroupOut()
                 for index_out, (train, val) in enumerate( logo.split(X, y.flatten(), groups = group.flatten()) ):
-                    print(f'Beginning nested CV loop {index_out+1}', end = '\r')
+                    if verbosity_level >= 3: print(f'Beginning nested CV loop {index_out+1} out of {len( set(group.flatten()) )}', end = '\r')
                     for index, this_model in enumerate(model_name):
-                        if this_model in {'ALVEN', 'SVR', 'RF', 'EN', 'PLS', 'SPLS'}: # There may be other models if the user passed model_name manually
+                        if this_model in {'LCEN', 'SVM', 'RF', 'GBDT', 'AdaB', 'EN', 'PLS', 'SPLS'}: # There may be other models if the user passed model_name manually
                             MSE_val[index, index_out] = run_cv_ML(this_model, X[train], y[train], X_scale[train], y_scale[train], X[val], y[val], X_scale[val], y_scale[val],
-                                    cv_method, group[train], K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type, ALVEN_cutoff, ALVEN_interaction, True)
+                                    cv_method, group[train], K_fold, Nr, alpha, l1_ratio, lag, min_lag, robust_priority, degree, trans_type, LCEN_cutoff, LCEN_interaction, LCEN_transform_y,
+                                    RF_n_estimators, RF_max_depth, RF_min_samples_leaf, RF_n_features, learning_rate, SVM_gamma, SVM_C, SVM_epsilon, verbosity_level, True)
 
             # Nested CV MSE results
             time_now = '-'.join([str(elem) for elem in localtime()[:6]]) # YYYY-MM-DD-hh-mm-ss
@@ -427,52 +463,11 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
             ax.set_xticklabels(model_name)
             ax.set_title('Testing RMSE distribution using nested CV')
             plt.savefig(f'RMSE_violin_plot_{time_now}.png')
-
             # Final model fitting
             local_selected_model = model_name[np.nanargmin(np.mean(MSE_val, axis = 1))]
             fitting_result[local_selected_model], _ = run_cv_ML(local_selected_model, X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale,
-                    cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type, ALVEN_cutoff, ALVEN_interaction)
-
-    # Dynamic models
-    if 'RNN' in model_name:
-        print('Running model RNN', end = '\r')
-        temp = cv.CV_mse('RNN', X_scale, y_scale, X_test_scale, y_test_scale, X, y, cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr, scale_X = scale_X,
-                        scale_y = scale_y, use_cross_entropy = use_cross_entropy, activation = activation, MLP_layers = MLP_layers, RNN_layers = RNN_layers,
-                        batch_size = batch_size, learning_rate = learning_rate, weight_decay = weight_decay, n_epochs = n_epochs, val_loss_file = val_loss_file,
-                        expand_hyperparameter_search = expand_hyperparameter_search)
-        fitting_result['RNN'] = {'final_model': temp[0], 'mse_train': temp[2], 'mse_val': temp[1].min().min(), 'mse_test': temp[3],
-        'best_hyperparameters': temp[6], 'yhat_train': temp[4], 'yhat_test': temp[5]}
-        print('Completed model RNN' + ' '*15)
-
-    if 'DALVEN' in model_name:
-        print('Running model DALVEN', end = '\r')        
-        fitting_result['DALVEN'], _ = run_cv_ML('DALVEN', X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale,
-                                    cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type, ALVEN_cutoff, ALVEN_interaction)
-        print('Completed model DALVEN')
-
-    if 'DALVEN_full_nonlinear' in model_name:
-        print('Running model DALVEN_full_nonlinear', end = '\r')        
-        fitting_result['DALVEN_full_nonlinear'], _ = run_cv_ML('DALVEN_full_nonlinear', X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale,
-                                    cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type, ALVEN_cutoff, ALVEN_interaction)
-        print('Completed model DALVEN_full_nonlinear')
-
-    if 'SS' in model_name:
-        import timeseries_regression_matlab as t_matlab
-        # MATLAB
-        matlab_params, matlab_myresults, matlab_MSE_train, matlab_MSE_val, matlab_MSE_test, matlab_y_predict_train, matlab_y_predict_val, matlab_y_predict_test,\
-                matlab_train_error, matlab_val_error, matlab_test_error = t_matlab.timeseries_matlab_single(X, y, X_test, y_test, train_ratio = 1,
-                maxorder = maxorder, mynow = 1, steps = K_steps, plot = plot_interrogation)
-        local_selected_model = matlab_params['method'][0]
-        fitting_result[local_selected_model] = {'model_hyper': matlab_params, 'final_model': matlab_myresults, 'mse_train': matlab_MSE_train, 'mse_val':matlab_MSE_val,
-                'mse_test': matlab_MSE_test, 'yhat_train': matlab_y_predict_train, 'yhat_val': matlab_y_predict_val, 'yhat_test': matlab_y_predict_test}
-        # ADAPTx
-        if ADAPTx_path:
-            import timeseries_regression_Adaptx as t_Adaptx
-            Adaptx_optimal_params, Adaptx_myresults, Adaptx_MSE_train, Adaptx_MSE_val, Adaptx_MSE_test, Adaptx_y_predict_train, Adaptx_y_predict_val, Adaptx_y_predict_test,\
-                    Adaptx_train_error, Adaptx_val_error, Adaptx_test_error = t_Adaptx.Adaptx_matlab_single(X, y, ADAPTx_save_path, ADAPTx_path, X_test, y_test, train_ratio = 1,
-                    max_lag = ADAPTx_max_lag, mydegs = ADAPTx_degrees, mynow = 1, steps = K_steps, plot = plot_interrogation) 
-            fitting_result['ADAPTx'] = {'model_hyper': Adaptx_optimal_params, 'final_model': Adaptx_myresults, 'mse_train': Adaptx_MSE_train, 'mse_val': Adaptx_MSE_val,
-                    'mse_test': Adaptx_MSE_test, 'yhat_train': Adaptx_y_predict_train, 'yhat_val': Adaptx_y_predict_val, 'yhat_test': Adaptx_y_predict_test}
+                    cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, min_lag, robust_priority, degree, trans_type, LCEN_cutoff, LCEN_interaction, LCEN_transform_y,
+                    RF_n_estimators, RF_max_depth, RF_min_samples_leaf, RF_n_features, learning_rate, SVM_gamma, SVM_C, SVM_epsilon, verbosity_level)
 
     # Finding the best model
     for idx, entry in enumerate(fitting_result): # TODO: this will probably not work with OLS, since it doesn't have a mse_val entry (see above)
@@ -498,23 +493,42 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
         fitting_result[model]['predicted_class_train'] = fitting_result[model]['logits_train_normalized'].argmax(axis = 1)
         fitting_result[model]['logits_test_normalized'] = (fitting_result[selected_model]['logits_test'].T / fitting_result[selected_model]['logits_test'].sum(axis=1)).T
         fitting_result[model]['predicted_class_test'] = fitting_result[model]['logits_test_normalized'].argmax(axis = 1)
+        # TODO: add confusion matrix here, then calculate rec, pre, F1, and MCC
     else:
-        fitting_result[selected_model]['yhat_train_nontrans'] = scaler_y.inverse_transform(np.atleast_2d(fitting_result[selected_model]['yhat_train']))
+        if scale_y and selected_model != 'LCEN': # LCEN already returns unscaled predictions
+            fitting_result[selected_model]['yhat_train_nontrans'] = scaler_y.inverse_transform(np.atleast_2d(fitting_result[selected_model]['yhat_train']))
+            fitting_result[selected_model]['yhat_test_nontrans'] = scaler_y.inverse_transform(np.atleast_2d(fitting_result[selected_model]['yhat_test']))
+        else:
+            fitting_result[selected_model]['yhat_train_nontrans'] = fitting_result[selected_model]['yhat_train']
+            fitting_result[selected_model]['yhat_test_nontrans'] = fitting_result[selected_model]['yhat_test']
+            del fitting_result[selected_model]['yhat_train']
+            del fitting_result[selected_model]['yhat_test']
         fitting_result[selected_model]['yhat_train_nontrans_mean'] = np.mean(fitting_result[selected_model]['yhat_train_nontrans'])
         fitting_result[selected_model]['yhat_train_nontrans_stdev'] = np.std(fitting_result[selected_model]['yhat_train_nontrans'])
         fitting_result[selected_model]['MSE_train_nontrans'] = np.mean( (fitting_result[selected_model]['yhat_train_nontrans'].squeeze() - y[lag:].squeeze())**2 )
         fitting_result[selected_model]['RMSE_train_nontrans'] = np.sqrt(fitting_result[selected_model]['MSE_train_nontrans'])
-        fitting_result[selected_model]['yhat_test_nontrans'] = scaler_y.inverse_transform(np.atleast_2d(fitting_result[selected_model]['yhat_test']))
-        fitting_result[selected_model]['yhat_test_nontrans_mean'] = np.mean(fitting_result[selected_model]['yhat_test_nontrans'])
-        fitting_result[selected_model]['yhat_test_nontrans_stdev'] = np.std(fitting_result[selected_model]['yhat_test_nontrans'])
-        fitting_result[selected_model]['MSE_test_nontrans'] = np.mean( (fitting_result[selected_model]['yhat_test_nontrans'].squeeze() - y_test[lag:].squeeze())**2 )
-        fitting_result[selected_model]['RMSE_test_nontrans'] = np.sqrt(fitting_result[selected_model]['MSE_test_nontrans'])
+        SSErr = ((fitting_result[selected_model]['yhat_train_nontrans'].squeeze() - y[lag:].squeeze())**2).sum()
+        SST = ((y[lag:].squeeze() - y[lag:].squeeze().mean())**2).sum()
+        fitting_result[selected_model]['R^2_train'] = 1 - SSErr/SST
+        non_zero = y[lag:].squeeze() != 0 # Avoiding infinity mean relative errors if at least one entry in y is 0
+        fitting_result[selected_model]['Mean_relative_error_train'] = np.nanmean( np.abs((fitting_result[selected_model]['yhat_train_nontrans'].squeeze()[non_zero] - y[lag:].squeeze()[non_zero]) / y[lag:].squeeze()[non_zero]) )
+        # If no test set was used, these test set statistics are equal to those from the train set
+        if fitting_result[selected_model]['yhat_train_nontrans'].shape != fitting_result[selected_model]['yhat_test_nontrans'].shape or not(np.all(fitting_result[selected_model]['yhat_train_nontrans'] == fitting_result[selected_model]['yhat_test_nontrans'])):
+            fitting_result[selected_model]['yhat_test_nontrans_mean'] = np.mean(fitting_result[selected_model]['yhat_test_nontrans'])
+            fitting_result[selected_model]['yhat_test_nontrans_stdev'] = np.std(fitting_result[selected_model]['yhat_test_nontrans'])
+            fitting_result[selected_model]['MSE_test_nontrans'] = np.mean( (fitting_result[selected_model]['yhat_test_nontrans'].squeeze() - y_test.squeeze())**2 )
+            fitting_result[selected_model]['RMSE_test_nontrans'] = np.sqrt(fitting_result[selected_model]['MSE_test_nontrans'])
+            SSErr = ((fitting_result[selected_model]['yhat_test_nontrans'].squeeze() - y_test.squeeze())**2).sum()
+            SST = ((y_test.squeeze() - y_test.squeeze().mean())**2).sum()
+            fitting_result[selected_model]['R^2_test'] = 1 - SSErr/SST
+            non_zero = y_test.squeeze() != 0 # Avoiding infinity mean relative errors if at least one entry in y_test is 0
+            fitting_result[selected_model]['Mean_relative_error_test'] = np.mean( np.abs((fitting_result[selected_model]['yhat_test_nontrans'].squeeze()[non_zero] - y_test.squeeze()[non_zero]) / y_test.squeeze()[non_zero]) )
     # Residual analysis + test for dynamics in the residual
-    if len(y_test.squeeze()) >= 4 and not use_cross_entropy and selected_model != 'RNN': # TODO: residuals with small lengths lead to errors when plotting ACF. Need to figure out why
-        _, dynamic_test_result = residual_analysis(X_test[lag:], y_test[lag:].squeeze(), fitting_result[selected_model]['yhat_test_nontrans'].squeeze(), plot_interrogation, alpha = significance, round_number = selected_model)
-        if dynamic_test_result and not(dynamic_model) and selected_model not in {'RNN', 'DALVEN', 'DALVEN_full_nonlinear', 'ADAPTx'}: # TODO: Get the names of the MATLAB models and add them here
-            print('A residual analysis found dynamics in the system. Please run SPA again with dynamic_model = True')
-            print('Note that specifying a non-dynamic model will override the dynamic_model flag')
+    if len(y_test.squeeze()) >= 4 and not use_cross_entropy and (selected_model not in {'RNN', 'LCEN'} or (selected_model == 'LCEN' and lag == 0)): # TODO: residuals with small lengths lead to errors when plotting ACF. Need to figure out why
+        _, dynamic_test_result = residual_analysis(X_test, y_test.squeeze(), fitting_result[selected_model]['yhat_test_nontrans'].squeeze(), plot_interrogation, alpha = significance, round_number = selected_model)
+        if dynamic_test_result and not(dynamic_model) and (selected_model not in {'RNN', 'LCEN'} or (selected_model == 'LCEN' and lag == 0)) and verbosity_level:
+            print('A residual analysis found dynamics in the system. Please run SPA again with dynamic_model = True or specify a dynamic model via model_name.')
+            print('Note that specifying any model via model_name (including nondynamic ones) will override the dynamic_model flag.')
 
     # Setup for saving
     # jsons do not work with numpy arrays - converting to list
@@ -538,8 +552,7 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
     # Saving as a json file
     with open(f'SPA_results_{time_now}.json', 'w') as f:
         json.dump(fr2, f, indent = 4)
-
-    print(f'The best model is {selected_model}. View its results via fitting_result["{selected_model}"] or by opening the SPA_results json/pickle files.')
+    if verbosity_level: print(f'The best model is {selected_model}. View its results via fitting_result["{selected_model}"] or by opening the SPA_results json/pickle files.')
     return fitting_result, selected_model
 
 def load_file(filename):
@@ -564,14 +577,15 @@ def load_file(filename):
         raise ValueError(f'Please provide a filename with extension in {{.txt, .csv, .tsv, .xls, .xlsx, .npy}}. You passed {filename}')
     return my_file
 
-def run_cv_ML(model_index, X_train, y_train, X_train_scaled, y_train_scaled, X_test, y_test, X_test_scaled, y_test_scaled, cv_method,
-                        group, K_fold, Nr, alpha, l1_ratio, lag, robust_priority, degree, trans_type, ALVEN_cutoff, ALVEN_interaction, for_nested_validation = False):
+def run_cv_ML(model_index, X_train, y_train, X_train_scaled, y_train_scaled, X_test, y_test, X_test_scaled, y_test_scaled, cv_method, group, K_fold, Nr,
+              alpha, l1_ratio, lag, min_lag, robust_priority, degree, trans_type, LCEN_cutoff, LCEN_interaction, LCEN_transform_y, RF_n_estimators,
+              RF_max_depth, RF_min_samples_leaf, RF_n_features, learning_rate, SVM_gamma, SVM_C, SVM_epsilon, verbosity_level, for_nested_validation = False):
     """
     Runs a nondynamic model for CV or final-run purposes. Automatically called by SPA.
 
     Parameters
     ----------
-    model_index to ALVEN_interaction
+    model_index to verbosity_level
         Automatically called by SPA based on what was passed to main_SPA()
     for_nested_validation : bool, optional, default = False
         Whether the run is done to validate a model through nested validation (NV) (to determine ...
@@ -583,32 +597,42 @@ def run_cv_ML(model_index, X_train, y_train, X_train_scaled, y_train_scaled, X_t
         X_val, y_val = X_test, y_test
         X_val_scaled, y_val_scaled = X_test_scaled, y_test_scaled
 
-        if model_index in {'ALVEN', 'DALVEN', 'DALVEN_full_nonlinear'}:
+        if model_index == 'LCEN':
             _, _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train, y_train, X_val, y_val, None, None, cv_method, K_fold, Nr, group = group, alpha = alpha,
-                    l1_ratio = l1_ratio, lag = lag, label_name = True, robust_priority = robust_priority, degree = degree, trans_type = trans_type,
-                    ALVEN_cutoff = ALVEN_cutoff, ALVEN_interaction = ALVEN_interaction)
-        elif model_index == 'SVR' or model_index == 'RF':
+                    l1_ratio = l1_ratio, lag = lag, min_lag = min_lag, label_name = True, robust_priority = robust_priority, degree = degree, trans_type = trans_type,
+                    LCEN_cutoff = LCEN_cutoff, LCEN_interaction = LCEN_interaction, LCEN_transform_y = LCEN_transform_y, verbosity_level = verbosity_level)
+        elif model_index in {'RF', 'GBDT', 'AdaB'}:
             _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, X_train, y_train, cv_method,
-                    K_fold, Nr, group = group, robust_priority = robust_priority)
-        else:
+                    K_fold, Nr, group = group, robust_priority = robust_priority, RF_n_estimators = RF_n_estimators, RF_max_depth = RF_max_depth,
+                    RF_min_samples_leaf = RF_min_samples_leaf, RF_n_features = RF_n_features, learning_rate = learning_rate, verbosity_level = verbosity_level)
+        elif model_index == 'SVM':
+            _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, X_train, y_train, cv_method,
+                    K_fold, Nr, group = group, robust_priority = robust_priority, SVM_gamma = SVM_gamma, SVM_C = SVM_C, SVM_epsilon = SVM_epsilon, verbosity_level = verbosity_level)
+        else: # EN, PLS, and SPLS
             _, _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, X_train, y_train, cv_method,
-                    K_fold, Nr, group = group, alpha = alpha, l1_ratio = l1_ratio, robust_priority = robust_priority)
+                    K_fold, Nr, group = group, alpha = alpha, l1_ratio = l1_ratio, robust_priority = robust_priority, verbosity_level = verbosity_level)
         return mse_val
     else:
-        if model_index in {'ALVEN', 'DALVEN', 'DALVEN_full_nonlinear'}:
+        if model_index == 'LCEN':
             model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train, y_train, X_test, y_test, None, None,
-                    cv_method, K_fold, Nr, group = group, alpha = alpha, l1_ratio = l1_ratio, lag = lag, label_name = True, robust_priority = robust_priority, degree = degree,
-                    trans_type = trans_type, ALVEN_cutoff = ALVEN_cutoff, ALVEN_interaction = ALVEN_interaction)
+                    cv_method, K_fold, Nr, group = group, alpha = alpha, l1_ratio = l1_ratio, lag = lag, min_lag = min_lag, label_name = True, robust_priority = robust_priority,
+                    degree = degree, trans_type = trans_type, LCEN_cutoff = LCEN_cutoff, LCEN_interaction = LCEN_interaction, LCEN_transform_y = LCEN_transform_y, verbosity_level = verbosity_level)
             fitting_result = {'model_hyper': model_hyper, 'final_model': final_model, 'model_params': model_params, 'mse_train': mse_train, 'mse_val': mse_val,
                     'mse_test': mse_test, 'yhat_train': yhat_train, 'yhat_test': yhat_test}
-        elif model_index == 'SVR' or model_index == 'RF':
+        elif model_index in {'RF', 'GBDT', 'AdaB'}:
             model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled, y_test_scaled,
-                    X_train, y_train, cv_method, K_fold, Nr, group = group, robust_priority = robust_priority)
+                    X_train, y_train, cv_method, K_fold, Nr, group = group, robust_priority = robust_priority, RF_n_estimators = RF_n_estimators, RF_max_depth = RF_max_depth,
+                    RF_min_samples_leaf = RF_min_samples_leaf, RF_n_features = RF_n_features, learning_rate = learning_rate, verbosity_level = verbosity_level)
             fitting_result = {'model_hyper': model_hyper, 'final_model': final_model, 'mse_train': mse_train, 'mse_val': mse_val, 'mse_test': mse_test,
                     'yhat_train': yhat_train, 'yhat_test': yhat_test}
-        else:
+        elif model_index == 'SVM':
+            model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled, y_test_scaled,
+                    X_train, y_train, cv_method, K_fold, Nr, group = group, robust_priority = robust_priority, SVM_gamma = SVM_gamma, SVM_C = SVM_C, SVM_epsilon = SVM_epsilon, verbosity_level = verbosity_level)
+            fitting_result = {'model_hyper': model_hyper, 'final_model': final_model, 'mse_train': mse_train, 'mse_val': mse_val, 'mse_test': mse_test,
+                    'yhat_train': yhat_train, 'yhat_test': yhat_test}
+        else: # EN, PLS, and SPLS
             model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled,
-                    y_test_scaled, X_train, y_train, cv_method, K_fold, Nr, group = group, alpha = alpha, l1_ratio = l1_ratio, robust_priority = robust_priority)
+                    y_test_scaled, X_train, y_train, cv_method, K_fold, Nr, group = group, alpha = alpha, l1_ratio = l1_ratio, robust_priority = robust_priority, verbosity_level = verbosity_level)
             fitting_result = {'model_hyper': model_hyper, 'final_model': final_model, 'model_params': model_params, 'mse_train': mse_train, 'mse_val': mse_val,
                     'mse_test': mse_test, 'yhat_train': yhat_train, 'yhat_test': yhat_test}
         return fitting_result, mse_val
