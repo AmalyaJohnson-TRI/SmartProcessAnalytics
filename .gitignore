@@ -30,10 +30,6 @@ MANIFEST
 *.manifest
 *.spec
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
 # Unit test / coverage reports
 htmlcov/
 .tox/
@@ -69,19 +65,18 @@ ENV/
 env.bak/
 venv.bak/
 
-# Pyre type checker
-.pyre/
-
 # Plots
 /Code-SPA/*.png
 /Examples/*.png
 /Examples/*.svg
 
-# Old or non-uploaded examples
+# Old or non-uploaded examples, or example run files
 /Examples/Example_1.py
 /Examples/Printer*
 /Examples/*.json
 /Examples/Multicollinearity*/
 /Examples/GEFCom*
 /Examples/temp*
+/Examples/*val-loss.csv
+/Examples/*.pt
 
