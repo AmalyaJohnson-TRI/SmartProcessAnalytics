@@ -4,7 +4,7 @@ from sklearn.linear_model import ElasticNet
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 from sklearn.metrics import mean_squared_error as MSE
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, AdaBoostRegressor
 from sklearn.svm import SVR
 import numpy as np
 import warnings
@@ -24,12 +24,12 @@ def OLS_fitting(X, y, X_test, y_test):
 
     # Training
     OLS_model = sm.OLS(y, X).fit()
-    yhat_train = OLS_model.predict().reshape((-1,1))
+    yhat_train = OLS_model.predict()
     mse_train = MSE(y, yhat_train)
     OLS_params = OLS_model.params.reshape(-1,1) # Fitted parameters
     
     # Testing
-    yhat_test = OLS_model.predict(X_test).reshape((-1,1))
+    yhat_test = OLS_model.predict(X_test)
     mse_test = MSE(y_test, yhat_test)
     return(OLS_model, OLS_params, mse_train, mse_test, yhat_train, yhat_test)
 
@@ -46,13 +46,13 @@ def SPLS_fitting(X, y, X_test, y_test, K = None, eta = None, eps = 1e-4, maxstep
     K: int, optional, default = None
         Number of latent variables
     eta: float, optional, default = None
-        Sparsity tuning parameter ranging from 0 to 1
+        Sparsity tuning parameter ranging from 0 to 1. 0 is equivalent to PLS.
     """
     _, selected_variables, _, _ = SPLS(X, y, K, eta, eps = eps, max_steps = maxstep)
     if len(selected_variables) >= K:
         SPLS_model = PLSRegression(K, scale = False, tol = eps).fit(X[:, selected_variables], y)
     else:
-        return None, None, np.inf, np.inf, None, None # TODO: should we really return np.inf?
+        return None, None, np.inf, np.inf, None, None
     SPLS_params = SPLS_model.coef_.squeeze()
     # Predictions and MSEs
     yhat_train = np.dot(X[:, selected_variables], SPLS_params)
@@ -85,7 +85,7 @@ def PLS_fitting(X, y, X_test, y_test, K = None, eps = 1e-4, maxstep = 1000): # T
 
     return PLS_model, PLS_params, mse_train, mse_test, yhat_train, yhat_test
 
-def EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter = 10000, tol = 1e-4):
+def EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter = 10000, tol = 1e-4, random_state = 0):
     """
     Fits data using sklearn's Elastic Net model
 
@@ -99,8 +99,12 @@ def EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter = 10000, tol = 1e
         The weight of the L1 and L2 regularizations: alpha*l1_ratio*||w||_1 + 0.5*alpha*(1 - l1_ratio)*||w||^2_2
     l1_ratio : float
         Ratio of L1 penalty to total penalty. When l1_ratio == 1, only the L1 penalty is used.
+    max_iter : int, optional, default = 10000
+        The maximum number of iterations
+    random_state : int or None, optional, default = 0
+        Seed for the random number generator.
     """
-    EN_model = ElasticNet(random_state = 0, alpha = alpha, l1_ratio = l1_ratio, fit_intercept = False, max_iter = max_iter, tol = tol)
+    EN_model = ElasticNet(random_state = random_state, alpha = alpha, l1_ratio = l1_ratio, fit_intercept = False, max_iter = max_iter, tol = tol)
     EN_model.fit(X, y)
     EN_params = EN_model.coef_ # Fitted parameters
     # Predictions and MSEs
@@ -110,12 +114,11 @@ def EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter = 10000, tol = 1e
     mse_test = MSE(y_test, yhat_test)
     return (EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test)
 
-def ALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, max_iter = 10000, tol = 1e-4, trans_type = 'all', ALVEN_type = 'ALVEN', interaction = True, selection = None):
+def LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, min_lag = 0, max_iter = 10000, tol = 1e-4, trans_type = 'all', interaction = True, selection = None, transform_y = False):
     """
-    Fits data using Algebraic Learning Via Elastic Net (ALVEN), a nonlinear expansion of Elastic Net.
-    ALVEN was originally published in doi.org/10.1016/j.compchemeng.2020.107103
-    The implementation below uses the LCEN algorithm over the original ALVEN algorithm.
-    LCEN is an upgraded, non-linear feature selection algorithm with considerably improved feature selection capabilities, model accuracy, and speed.
+    Fits data using the LASSO-Clip-EN (LCEN) algorithm (doi.org/10.48550/arXiv.2402.17120).
+    LCEN is a powerful, non-linear, and interpretable feature selection algorithm with considerable feature selection capabilities, model accuracy, and speed.
+    LCEN was created as an upgrade to ALVEN, which was originally published in doi.org/10.1016/j.compchemeng.2020.107103
 
     Parameters
     ----------
@@ -132,50 +135,56 @@ def ALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, ma
     lag : int, optional, default = 0
         Variable lags to be considered. A lag of L will make the model take into account ...
             variables from point xt to xt-L and from yt to yt-L.
-        Relevant only when ALVEN_type != 'alven'.
     trans_type : str in {'all', 'poly', 'simple_interaction'}, optional, default == 'all'
         Whether to include all transforms (polynomial, log, sqrt, and inverse), only polynomial transforms (and, ...
             optionally, interactions), or just interactions.
         The log, sqrt, and inverse terms never include interactions among the same transform type (such as ln(x1)*ln(x4)), ...
             but include some interactions among each other for the same variable (such as ln(x0)/x0, x0^1.5, etc.).
-    ALVEN_type : string in {'alven', 'dalven', 'dalven_full_nonlinear'}, optional, default = 'alven'
-        Whether to use the ALVEN, the regular DALVEN or DALVEN full nonlinear. The difference is whether the variables representing ...
-              previous time points are included in the nonlinear transformations (DALVEN_full_nonlinear) or not (DALVEN)
     interaction : bool, optional, default = True
         Whether to also include interactions between different variables (such as x1*x3 or x0*x5^2)
         Note that, if trans_type == 'simple_interaction', this variable must be set to True
     selection : array of Bool, optional, default = None
         Which variables will be used. This is obtained automatically by SPA and should not be passed by the user
+    transform_y : Bool, optional, default = False
+        Whether to also perform transforms on the y measurements from previous timepoints
+        Relevant only when lag > 0
     """
-    if ALVEN_type.casefold() in {'alven', 'dalven'} and X.shape[1] > 0: # Feature transformation; done below for DALVEN_type == 'dalven_full_nonlinear'
+    # Expanding the X features
+    if not transform_y and X.shape[1] > 0:
         X, X_test, label_names = _feature_trans(X, X_test, degree, interaction, trans_type)
-    elif ALVEN_type.casefold() in {'alven', 'dalven'}: # Just the intercept - that is, an Nx1 vector full of 1
-        label_names = ['intercept']
-        X = np.ones((X.shape[0], 1))
-        X_test = np.ones((X_test.shape[0], 1))
-    # Adding variables from previous timesteps. Not relevant for ALVEN
-    if ALVEN_type.casefold() in {'dalven', 'dalven_full_nonlinear'}:
-        not_intercept_idx = 1 if ALVEN_type.casefold() == 'dalven' else 0 # We ignore the 1st column because it is the intercept after X goes through _feature_trans()
-        # Lag padding for X
-        X_temp = np.hstack([X[lag-1-idx : -idx-1, not_intercept_idx:] for idx in range(lag)]) # The additional entries representing the previous times (t-1 to t-lag)
-        y_temp = np.hstack([y[lag-1-idx : -idx-1] for idx in range(lag)])
+    elif X.shape[1] == 0:
+        label_names = np.array([])
+    if transform_y:
+        n_X_vars = X.shape[1]
+    # Adding variables from previous timesteps (t-1 to t-lag)
+    if lag > 0:
+        X_temp = np.hstack([X[lag-1-idx : -idx-1, :] for idx in range(min_lag, lag)]) # The additional entries representing the previous times (t-1 to t-lag)
+        y_temp = np.hstack([y[lag-1-idx : -idx-1] for idx in range(min_lag, lag)])
+        X_test_temp = np.hstack([np.concatenate((X[X.shape[0]-idx-1:, :], X_test[: -idx-1, :])) for idx in range(min_lag, lag)]) # No need to remove entries from X_test or y_test because we can use the data from the final points of X or y to predict the initial points of X_test or y_test
+        y_test_temp = np.hstack([np.concatenate((y[(len(y)-idx-1):],  y_test[: -idx-1])) for idx in range(min_lag, lag)])
         X = np.hstack((X[lag:], X_temp, y_temp))
-        X_test_temp = np.hstack([X_test[lag-1-idx : -idx-1, not_intercept_idx:] for idx in range(lag)])
-        y_test_temp = np.hstack([y_test[lag-1-idx : -idx-1] for idx in range(lag)])
-        X_test = np.hstack((X_test[lag:], X_test_temp, y_test_temp))
-        if ALVEN_type.casefold() == 'dalven':
-            label_names = np.concatenate((label_names, [elem + f'(t-{idx+1})' for idx in range(lag) for elem in label_names[1:]], [f'y(t-{idx+1})' for idx in range(lag)]))
-        # Shorterning y
         y = y[lag:]
-        y_test = y_test[lag:]
-    if ALVEN_type.casefold() == 'dalven_full_nonlinear': # Feature transformation; done above for ALVEN_type in {'alven', 'dalven'}
+        X_test = np.hstack((X_test, X_test_temp, y_test_temp))
+        if not transform_y:
+            label_names = np.concatenate((label_names, [elem + f'(t-{idx+1})' for idx in range(lag-min_lag) for elem in label_names], [f'y(t-{idx+1})' for idx in range(lag-min_lag)]))
+    if transform_y: # Feature transformation that includes the y features in the X and X_test variables
         X, X_test, label_names = _feature_trans(X, X_test, degree, interaction, trans_type)
+        # Correcting the label names
+        for idx in range(n_X_vars*(lag+1) + lag - 1, n_X_vars-1, -1): # xN to x(n_X_vars). In reverse order to avoid x11 to x19 being caught in x1, for example
+            for elem_idx, elem in enumerate(label_names):
+                if idx >= n_X_vars * (lag + 1): # These entries are the y(t-1), y(t-2), ..., y(t-N) entries
+                    replacement = f'y(t-{idx - n_X_vars * (lag+1) + 1})'
+                elif idx >= n_X_vars: # These entries are the x0(t-1), x1(t-1), ..., x0(t-N), ..., xN(t-N) entries
+                    replacement = f'x{idx%n_X_vars}(t-{idx//n_X_vars})'
+                if idx >= n_X_vars: # Entries < n_X_vars are the actual x0, x1, ..., xN entries. Thus, they already have the correct ID
+                    label_names[elem_idx] = elem.replace(f'x{idx}', replacement)
 
     # Scale data (mean = 0, stdev = 1)
-    scaler_x = StandardScaler(with_mean=True, with_std=True)
-    scaler_x.fit(X)
-    X = scaler_x.transform(X)
-    X_test = scaler_x.transform(X_test)
+    if X.shape[0] > 0 and X.shape[1] > 0: # StandardScaler requires at least one feature and one sample to work
+        scaler_x = StandardScaler(with_mean=True, with_std=True)
+        scaler_x.fit(X)
+        X = scaler_x.transform(X)
+        X_test = scaler_x.transform(X_test)
     scaler_y = StandardScaler(with_mean=True, with_std=True)
     scaler_y.fit(y)
     y = scaler_y.transform(y)
@@ -186,25 +195,25 @@ def ALVEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, ma
         X_test = X_test[:, selection]
 
     if X.shape[1] == 0:
-        ALVEN_model = None
-        ALVEN_params = np.empty(0)
+        LCEN_model = None
+        LCEN_params = np.empty(0)
         mse_train = np.var(y)
         mse_test = np.var(y_test)
         yhat_train = np.zeros(y.shape) # Ok to be 0 because y is scaled --> mean(y) is approximately 0
         yhat_test = np.zeros(y_test.shape)
     else:
-        ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test = EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter, tol)
+        LCEN_model, LCEN_params, mse_train, mse_test, yhat_train, yhat_test = EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter, tol)
     # Calculating information criteria values
     num_train = X.shape[0] # Typically written as n
-    num_parameter = (ALVEN_params!=0).flatten().sum() # Typically written as k
+    num_parameter = (LCEN_params!=0).flatten().sum() # Typically written as k
     AIC = num_train*np.log(mse_train) + 2*num_parameter # num_train * log(MSE) is one of the formulae to replace L. Shown in https://doi.org/10.1002/wics.1460, for example.
     AICc = AIC + 2*num_parameter*(num_parameter+1) / (num_train - num_parameter - 1)
     BIC = num_train*np.log(mse_train) + num_parameter*np.log(num_train)
-    return (ALVEN_model, ALVEN_params, mse_train, mse_test, yhat_train, yhat_test, label_names, (AIC, AICc, BIC))
+    return (LCEN_model, LCEN_params, mse_train, mse_test, yhat_train, yhat_test, label_names, (AIC, AICc, BIC))
 
-def RF_fitting(X, y, X_test, y_test, n_estimators = 100, max_depth = 10, min_samples_leaf = 0.1, max_features = 1.0, random_state = 0):
+def forest_fitting(X, y, X_test, y_test, n_estimators = 100, max_depth = 10, min_samples_leaf = 0.1, max_features = 1.0, learning_rate = None, random_state = 0):
     """
-    Fits data using a random forest regressor
+    Fits data using a random forest or gradient-boosted decision trees
 
     Parameters
     ----------
@@ -222,22 +231,28 @@ def RF_fitting(X, y, X_test, y_test, n_estimators = 100, max_depth = 10, min_sam
     max_features : int, (float < 1), None, or str in {'sqrt', 'log2'}, optional, default = 1.0
         Maximum number of features when considered for a potential splitting.
         If float, represents a fraction of the features used as the minimum.
-        Setting it to None, 'auto', or 1.0 uses all available features (X.shape[1] = m).
+        Setting it to None, 'auto', or 1.0 uses all available features (= X.shape[1] = m).
+    learning_rate : float or None, optional, default = None
+        The learning rate for gradient-boosted decision trees.
+        If None, a random forest regressor is used.
     random_state : int or None, optional, default = 0
         Seed for the random number generator.
     """
-    RF = RandomForestRegressor(n_estimators, max_depth = max_depth, random_state = random_state,
-                                    max_features = max_features, min_samples_leaf = min_samples_leaf)
-    RF.fit(X, y.flatten())
+    if learning_rate is None or learning_rate == 0:
+        forest = RandomForestRegressor(n_estimators, max_depth = max_depth, random_state = random_state, max_features = max_features, min_samples_leaf = min_samples_leaf)
+    else:
+        forest = GradientBoostingRegressor(n_estimators = n_estimators, learning_rate = learning_rate, max_depth = max_depth, random_state = random_state,
+                                           max_features = max_features, min_samples_leaf = min_samples_leaf)
+    forest.fit(X, y.flatten())
     # Predictions and MSEs
-    yhat_train = RF.predict(X).reshape((-1,1))
-    yhat_test = RF.predict(X_test).reshape((-1,1))
+    yhat_train = forest.predict(X)
+    yhat_test = forest.predict(X_test)
     mse_train = MSE(y, yhat_train)
     mse_test = MSE(y_test, yhat_test)
 
-    return (RF, mse_train, mse_test, yhat_train, yhat_test)
+    return (forest, mse_train, mse_test, yhat_train, yhat_test)
 
-def SVR_fitting(X, y, X_test, y_test, C = 100, epsilon = 10, gamma = 'auto', tol = 1e-4, max_iter = 10000):
+def SVM_fitting(X, y, X_test, y_test, gamma = 'scale', C = 100, epsilon = 0.1, tol = 1e-4, max_iter = 10000):
     """
     Support Vector Machine-based regression
 
@@ -247,23 +262,55 @@ def SVR_fitting(X, y, X_test, y_test, C = 100, epsilon = 10, gamma = 'auto', tol
         Training data predictors and response.
     X_test, y_test : Numpy array with shape N_test x m, N_test x 1
         Testing data predictors and response.
+    gamma : (float >=0) or str in {'scale', 'auto'}, optional, default = 'scale'
+        Kernel coefficient for the 'rbf', 'poly', and 'sigmoid' kernels
+        If 'scale', gamma = 1 / (X.shape[1] * X.var())
+        If 'auto', gamma = 1 / X.shape[1]
     C : float > 0, optional, default = 100
         Parameter inversely proportional to the strength of the regularization
-    epsilon : float >= 0, optional, default = 10
+    epsilon : float >= 0, optional, default = 0.1
         Epsilon-tube within which no penalty is associated in the training loss function
-    gamma : (float >=0) or str in {'scale', 'auto'}, optional, default = 'auto'
-        Kernal coefficient for the 'rbf', 'poly', and 'sigmoid' kernels
-        If 'auto', gamma = 1 / X.shape[1]
+    max_iter : int, optional, default = 10000
+        The maximum number of iterations
     """
-    SVR_model = SVR(gamma = gamma, C = C, epsilon = epsilon, tol = tol, max_iter = max_iter)
-    SVR_model.fit(X, y.flatten())
+    SVM_model = SVR(gamma = gamma, C = C, epsilon = epsilon, tol = tol, max_iter = max_iter)
+    SVM_model.fit(X, y.flatten())
     # Predictions and MSEs
-    yhat_train = SVR_model.predict(X).reshape((-1,1))
-    yhat_test = SVR_model.predict(X_test).reshape((-1,1))
+    yhat_train = SVM_model.predict(X)
+    yhat_test = SVM_model.predict(X_test)
     mse_train = MSE(y, yhat_train)
     mse_test = MSE(y_test, yhat_test)
 
-    return (SVR_model, mse_train, mse_test, yhat_train, yhat_test)
+    return (SVM_model, mse_train, mse_test, yhat_train, yhat_test)
+
+def AdaBoost_fitting(X, y, X_test, y_test, n_estimators = 50, learning_rate = 0.1, random_state = 0):
+    """
+    Adaptive Boosting regression
+
+    Parameters
+    ----------
+    X, y : Numpy array with shape N x m, N x 1
+        Training data predictors and response.
+    X_test, y_test : Numpy array with shape N_test x m, N_test x 1
+        Testing data predictors and response.
+    n_estimators : int, optional, default = 50
+        The maximum number of estimators used.
+        In case of perfect fit, the procedure is terminated early.
+    learning_rate : float, optional, default = 0.1
+        The learning rate applied at each boosting iteraction.
+        If None, a random forest regressor is used.
+    random_state : int or None, optional, default = 0
+        Seed for the random number generator.
+    """
+    AdaB_model = AdaBoostRegressor(n_estimators = n_estimators, learning_rate = learning_rate, loss = 'square', random_state = random_state)
+    AdaB_model.fit(X, y.flatten())
+    # Predictions and MSEs
+    yhat_train = AdaB_model.predict(X)
+    yhat_test = AdaB_model.predict(X_test)
+    mse_train = MSE(y, yhat_train)
+    mse_test = MSE(y_test, yhat_test)
+
+    return (AdaB_model, mse_train, mse_test, yhat_train, yhat_test)
 
 def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type = 'all'):
     """
@@ -294,7 +341,7 @@ def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type 
     X_test_out = None # Declaring this variable to avoid errors when doing the return statement
 
     # Polynomial transforms (and interaction terms)
-    poly = PolynomialFeatures(degree, include_bias = True, interaction_only = trans_type.casefold() == 'simple_interaction')
+    poly = PolynomialFeatures(degree, include_bias = False, interaction_only = trans_type.casefold() == 'simple_interaction', order = 'F') # Switching to Fortran order to speed up Elastic Net (and LCEN) [but does not make any significant difference]
     X_out = poly.fit_transform(X)
     label_names = poly.get_feature_names_out()
     interaction_column = np.array([' ' in elem for elem in label_names], dtype = bool) # To filter out interactions if user asked for a polynomial-only transform. Also for the log, sqrt, and inv terms below when poly_trans_only == False
@@ -327,9 +374,9 @@ def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type 
             Xinv_t[Xinv_t == np.inf] = 1e15
             Xinv_t[Xinv_t == -np.inf] = -1e15
         # ln transform
-        Xlog_trans = poly.fit_transform(Xlog)[:, ~interaction_column][:, 1:] # Transforming and removing interactions, as we do not care about log-log interactions
+        Xlog_trans = poly.fit_transform(Xlog)[:, ~interaction_column]
         X_out = np.column_stack((X_out, Xlog_trans))
-        temp_label_names = poly.get_feature_names_out()[~interaction_column][1:] # [1:] to remove the bias term, as it was already included with the polynomial transformations
+        temp_label_names = poly.get_feature_names_out()[~interaction_column]
         for idx in range(len(temp_label_names)): # Converting the names from x0-like to ln(x0)-like
             power_split = temp_label_names[idx].split('^') # Separates the variable (e.g.: x0 or x1) from the power it was raised to, if it exists
             if len(power_split) > 1:
@@ -341,7 +388,7 @@ def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type 
             temp_label_names[idx] = f'ln({base}){power}' # Final name is of the form ln(x1)^3, not ln(x1^3)
         label_names = np.concatenate((label_names, temp_label_names))
         if X_test is not None:
-            Xlog_test_trans = poly.fit_transform(Xlog_t)[:, ~interaction_column][:, 1:]
+            Xlog_test_trans = poly.fit_transform(Xlog_t)[:, ~interaction_column]
             X_test_out = np.column_stack((X_test_out, Xlog_test_trans))
         # sqrt transform
         X_out = np.column_stack((X_out, Xsqrt))
@@ -350,15 +397,22 @@ def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type 
         if X_test is not None:
             X_test_out = np.column_stack((X_test_out, Xsqrt_t))
         # Inverse transform
-        Xinv_trans = poly.fit_transform(Xinv)[:, 1:] # [:, 1:] to remove the bias term, as it was already included with the polynomial transformations
+        if not interaction:
+            Xinv_trans = poly.fit_transform(Xinv)[:, ~interaction_column]
+            temp_label_names = poly.get_feature_names_out()[~interaction_column]
+        else:
+            Xinv_trans = poly.fit_transform(Xinv)
+            temp_label_names = poly.get_feature_names_out()
         X_out = np.column_stack((X_out, Xinv_trans))
-        temp_label_names = poly.get_feature_names_out()[1:] # [1:] to remove the bias term, as it was already included with the polynomial transformations
         for idx in range(len(temp_label_names)): # Converting the names from x0-like to ln(x0)-like
-            temp_label_names[idx] = temp_label_names[idx].translate({ord(i): '*' for i in ' '}) # str.translate replaces the characters on the right of the for (in this case, a whitespace) with an asterisk
+            temp_label_names[idx] = temp_label_names[idx].translate({ord(i): '*' for i in ' '}) # str.translate replaces the characters on the right of the "for i in" (in this case, a whitespace) with an asterisk
             temp_label_names[idx] = f'1/({temp_label_names[idx]})' # 1/(x1^3) is the same as (1/x1)^3, so we do not need the fancy manipulations used above in the ln transform naming
         label_names = np.concatenate((label_names, temp_label_names))
         if X_test is not None:
-            Xinv_test_trans = poly.fit_transform(Xinv_t)[:, 1:]
+            if not interaction:
+                Xinv_test_trans = poly.fit_transform(Xinv_t)[:, ~interaction_column]
+            else:
+                Xinv_test_trans = poly.fit_transform(Xinv_t)
             X_test_out = np.column_stack((X_test_out, Xinv_test_trans))
         # Specific interactions between X, ln(X), sqrt(X), and 1/X that occur for degree >= 2
         if degree >= 2:
