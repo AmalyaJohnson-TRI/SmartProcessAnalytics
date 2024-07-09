@@ -369,7 +369,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         if lag > 0:
             X_temp = np.hstack([X[lag-1-idx : -idx-1, :] for idx in range(kwargs['min_lag'], lag)]) # The additional entries representing the previous times (t-1 to t-lag)
             y_temp = np.hstack([y[lag-1-idx : -idx-1] for idx in range(kwargs['min_lag'], lag)])
-            X_test_temp = np.hstack([np.concatenate((X_temp[X_temp.shape[0]-idx-1:, :], X_test[: -idx-1, :])) for idx in range(kwargs['min_lag'], lag)]) # No need to remove entries from X_test or y_test because we can use the data from the final points of X or y to predict the initial points of X_test or y_test
+            X_test_temp = np.hstack([np.concatenate((X[X.shape[0]-idx-1:, :], X_test[: -idx-1, :])) for idx in range(kwargs['min_lag'], lag)]) # No need to remove entries from X_test or y_test because we can use the data from the final points of X or y to predict the initial points of X_test or y_test
             y_test_temp = np.hstack([np.concatenate((y[(len(y)-idx-1):],  y_test[: -idx-1])) for idx in range(kwargs['min_lag'], lag)])
             X = np.hstack((X[lag:], X_temp, y_temp))
             y = y[lag:] # Shorterning y
