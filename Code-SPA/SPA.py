@@ -11,6 +11,7 @@ import json
 import pickle
 from time import localtime
 from torch import save as torchsave
+from collections import OrderedDict
 # Convenience imports
 from matplotlib import style
 style.use('default')
@@ -391,8 +392,20 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
         X_test_scale = X_scale
         y_test_scale = y_scale
 
-    # Model fitting
+    # Setting up a dict to save results (hyperparameters and predictions)
     fitting_result = {}
+    general_hyper = {'SPA version': '1.4.1', 'CV method': cv_method, 'Number of folds (K)': K_fold} # Some of some model-independent hyperparameters ### TODO: properly get SPA.__version__
+    if 're' in cv_method.casefold():
+        general_hyper['Number of CV repeats'] = Nr
+    general_hyper['Robust priority'] = robust_priority
+    general_hyper['Train data'] = f'File named \'{main_data}\' with shape {X.shape}'
+    if main_data_y:
+        general_hyper['Train data, y'] = f'File named \'{fmain_data_y}\''
+    if test_data:
+        general_hyper['Test data'] = f'File named \'{test_data}\' with shape {X_test.shape}'
+    if test_data_y:
+        general_hyper['Test data, y'] = f'File named \'{test_data_y}\''
+    # Model fitting
     if 'OLS' in model_name:
         from regression_models import OLS_fitting
         final_model, model_params, mse_train, mse_test, yhat_train, yhat_test = OLS_fitting(X_scale, y_scale, X_test_scale, y_test_scale)
@@ -481,6 +494,8 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
         raise UnboundLocalError(f'You input {model_name} for model_name, but that is not a valid name.')
 
     # Formatting a dictionary for the output
+    fitting_result[selected_model]['general_hyper'] = general_hyper
+    fitting_result[selected_model].move_to_end('general_hyper', last = False) # Move to beginning
     if 'model_hyper' in fitting_result[selected_model] and 'lag' in fitting_result[selected_model]['model_hyper'].keys(): # The first "lag" entries are removed from yhat, so we need to remove them from X and y
         lag = fitting_result[selected_model]['model_hyper']['lag']
     else:
@@ -618,21 +633,21 @@ def run_cv_ML(model_index, X_train, y_train, X_train_scaled, y_train_scaled, X_t
                     cv_method, K_fold, Nr, group = group, alpha = alpha, l1_ratio = l1_ratio, lag = lag, min_lag = min_lag, label_name = True, robust_priority = robust_priority,
                     degree = degree, trans_type = trans_type, LCEN_cutoff = LCEN_cutoff, LCEN_interaction = LCEN_interaction, LCEN_transform_y = LCEN_transform_y, verbosity_level = verbosity_level)
             fitting_result = {'model_hyper': model_hyper, 'final_model': final_model, 'model_params': model_params, 'mse_train': mse_train, 'mse_val': mse_val,
-                    'mse_test': mse_test, 'yhat_train': yhat_train, 'yhat_test': yhat_test}
+                              'mse_test': mse_test, 'yhat_train': yhat_train, 'yhat_test': yhat_test}
         elif model_index in {'RF', 'GBDT', 'AdaB'}:
             model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled, y_test_scaled,
                     X_train, y_train, cv_method, K_fold, Nr, group = group, robust_priority = robust_priority, RF_n_estimators = RF_n_estimators, RF_max_depth = RF_max_depth,
                     RF_min_samples_leaf = RF_min_samples_leaf, RF_n_features = RF_n_features, learning_rate = learning_rate, verbosity_level = verbosity_level)
             fitting_result = {'model_hyper': model_hyper, 'final_model': final_model, 'mse_train': mse_train, 'mse_val': mse_val, 'mse_test': mse_test,
-                    'yhat_train': yhat_train, 'yhat_test': yhat_test}
+                              'yhat_train': yhat_train, 'yhat_test': yhat_test}
         elif model_index == 'SVM':
             model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled, y_test_scaled,
                     X_train, y_train, cv_method, K_fold, Nr, group = group, robust_priority = robust_priority, SVM_gamma = SVM_gamma, SVM_C = SVM_C, SVM_epsilon = SVM_epsilon, verbosity_level = verbosity_level)
             fitting_result = {'model_hyper': model_hyper, 'final_model': final_model, 'mse_train': mse_train, 'mse_val': mse_val, 'mse_test': mse_test,
-                    'yhat_train': yhat_train, 'yhat_test': yhat_test}
+                              'yhat_train': yhat_train, 'yhat_test': yhat_test}
         else: # EN, PLS, and SPLS
             model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled,
                     y_test_scaled, X_train, y_train, cv_method, K_fold, Nr, group = group, alpha = alpha, l1_ratio = l1_ratio, robust_priority = robust_priority, verbosity_level = verbosity_level)
             fitting_result = {'model_hyper': model_hyper, 'final_model': final_model, 'model_params': model_params, 'mse_train': mse_train, 'mse_val': mse_val,
-                    'mse_test': mse_test, 'yhat_train': yhat_train, 'yhat_test': yhat_test}
-        return fitting_result, mse_val
+                              'mse_test': mse_test, 'yhat_train': yhat_train, 'yhat_test': yhat_test}
+        return OrderedDict(fitting_result), mse_val
