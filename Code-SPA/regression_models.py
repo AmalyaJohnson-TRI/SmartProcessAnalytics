@@ -35,7 +35,7 @@ def OLS_fitting(X, y, X_test, y_test):
 
 def SPLS_fitting(X, y, X_test, y_test, K = None, eta = None, eps = 1e-4, maxstep = 1000):
     """
-    Fits data using an Sparse PLS model (see doi.org/10.1111%2Fj.1467-9868.2009.00723.x)
+    Fits data using a Sparse PLS model (see doi.org/10.1111%2Fj.1467-9868.2009.00723.x)
 
     Parameters
     ----------
@@ -48,7 +48,10 @@ def SPLS_fitting(X, y, X_test, y_test, K = None, eta = None, eps = 1e-4, maxstep
     eta: float, optional, default = None
         Sparsity tuning parameter ranging from 0 to 1. 0 is equivalent to PLS.
     """
-    _, selected_variables, _, _ = SPLS(X, y, K, eta, eps = eps, max_steps = maxstep)
+    if eta:
+        _, selected_variables, _, _ = SPLS(X, y, K, eta, eps = eps, max_steps = maxstep)
+    else: # eta = 0 is equivalent to regular PLS, which selects all variables
+        selected_variables = np.ones(X.shape[1], dtype = bool)
     if len(selected_variables) >= K:
         SPLS_model = PLSRegression(K, scale = False, tol = eps).fit(X[:, selected_variables], y)
     else:
@@ -61,29 +64,6 @@ def SPLS_fitting(X, y, X_test, y_test, K = None, eta = None, eps = 1e-4, maxstep
     mse_test = MSE(y_test, yhat_test)
 
     return SPLS_model, SPLS_params, mse_train, mse_test, yhat_train, yhat_test
-
-def PLS_fitting(X, y, X_test, y_test, K = None, eps = 1e-4, maxstep = 1000): # TODO: merge with SPLS_fitting, since this is just a special case with eta = 0
-    """
-    Fits data using a PLS model
-
-    Parameters
-    ----------
-    X, y : Numpy array with shape N x m, N x 1
-        Training data predictors and response.
-    X_test, y_test : Numpy array with shape N_test x m, N_test x 1
-        Testing data predictors and response.
-    K: int, optional, default = None
-        Number of latent variables
-    """
-    PLS_model = PLSRegression(K, scale = False, tol = eps).fit(X, y)
-    PLS_params = PLS_model.coef_.squeeze()
-    # Predictions and MSEs
-    yhat_train = np.dot(X, PLS_params)
-    yhat_test = np.dot(X_test, PLS_params)
-    mse_train = MSE(y, yhat_train)
-    mse_test = MSE(y_test, yhat_test)
-
-    return PLS_model, PLS_params, mse_train, mse_test, yhat_train, yhat_test
 
 def EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter = 10000, tol = 1e-4, random_state = 0):
     """

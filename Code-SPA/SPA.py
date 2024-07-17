@@ -23,10 +23,10 @@ warnings.filterwarnings('ignore', category = RuntimeWarning)
 def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None, scale_X = True, scale_y = True, interpretable = False, continuity = False,
             group_name = None, spectral_data = False, plot_interrogation = False, nested_cv = False, robust_priority = False, dynamic_model = False, lag = [0],
             min_lag = 0, significance = 0.05, cat = None, xticks = None, yticks = ['y'], model_name = None, cv_method = None, K_fold = 5, Nr = 10, num_outer = 10,
-            l1_ratio = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99], alpha = 20, degree = [1, 2, 3], trans_type = 'all', LCEN_cutoff = 4e-2,
-            LCEN_interaction = True, LCEN_transform_y = False, RF_n_estimators = [10, 25, 50, 100, 200, 300], RF_max_depth = [2, 3, 5, 10, 15, 20, 40],
-            RF_min_samples_leaf = [0.001, 0.01, 0.02, 0.05, 0.1], RF_n_features = [0.1, 0.25, 0.333, 0.5, 0.667, 0.75, 1.0], SVM_gamma = None,
-            SVM_C = [0.001, 0.01, 0.1, 1, 10, 50, 100, 500], SVM_epsilon = [0.01, 0.02, 0.03, 0.05, 0.08, 0.09, 0.1, 0.15, 0.2, 0.3], activation = ['relu'],
+            l1_ratio = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99], alpha = 20, SPLS_K = None, SPLS_eta = None, degree = [1, 2, 3],
+            trans_type = 'all', LCEN_cutoff = 4e-2, LCEN_interaction = True, LCEN_transform_y = False, RF_n_estimators = [10, 25, 50, 100, 200, 300],
+            RF_max_depth = [2, 3, 5, 10, 15, 20, 40], RF_min_samples_leaf = [0.001, 0.01, 0.02, 0.05, 0.1], RF_n_features = [0.1, 0.25, 0.333, 0.5, 0.667, 0.75, 1.0],
+            SVM_gamma = None, SVM_C = [0.001, 0.01, 0.1, 1, 10, 50, 100, 500], SVM_epsilon = [0.01, 0.02, 0.03, 0.05, 0.08, 0.09, 0.1, 0.15, 0.2, 0.3], activation = ['relu'],
             MLP_layers = None, RNN_layers = None, batch_size = 32, learning_rate = [1e-2, 5e-3], weight_decay = 0, l1_penalty_factor = 0, n_epochs = 100,
             class_weight = None, scheduler = 'plateau', scheduler_mode = 'min', scheduler_factor = 0.5, scheduler_patience = 10, scheduler_min_LR = 1/16,
             scheduler_last_epoch = None, scheduler_warmup = 10, val_loss_file = None, expand_hyperparameter_search = False, verbosity_level = 2):
@@ -122,6 +122,13 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
         The weight of the L1 or L2 regularizations used when at least one of {'EN', 'LCEN'} is in model_name
         The regularization term is alpha*l1_ratio*||w||_1 + 0.5*alpha*(1 - l1_ratio)*||w||^2_2 or alpha*||w||^2_2
         If int, a list of alpha+1 values equal to np.concatenate(([0], np.logspace(-4.3, 0, kwargs['alpha']))) is generated
+    SPLS_K : list of integers, optional, default = None
+        A list of integers representing the maximum number of latent variables for Sparse PLS.
+        If None, see the SPLS section in cv_final.py for the defaults (depends on the size of X)
+    SPLS_eta : list of floats between 0 and 1, optional, default = None
+        A list of values used for the sparsity tuning parameter of Sparse PLS.
+        Every value should be between 0 and 1, where 0 is equivalent to PLS.
+        If None, defaults to np.linspace(0, 1, 20, endpoint = False)
     degree : list of int, optional, default = [1, 2, 3]
         The maximum degree of the X data transforms for the LCEN algorithm.
         Relevant only when 'LCEN' is in model_name
@@ -416,8 +423,9 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
                 if this_model in {'LCEN', 'SVM', 'RF', 'GBDT', 'AdaB', 'EN', 'PLS', 'SPLS'}: # There may be other models if the user passed model_name manually
                     if verbosity_level >= 2: print(f'Running model {this_model}', end = '\r')
                     fitting_result[this_model], _ = run_cv_ML(this_model, X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale, cv_method, group,
-                                                K_fold, Nr, alpha, l1_ratio, lag, min_lag, robust_priority, degree, trans_type, LCEN_cutoff, LCEN_interaction, LCEN_transform_y,
-                                                RF_n_estimators, RF_max_depth, RF_min_samples_leaf, RF_n_features, learning_rate, SVM_gamma, SVM_C, SVM_epsilon, verbosity_level)
+                                                K_fold, Nr, scale_X, scale_y, l1_ratio, alpha, SPLS_K, SPLS_eta, lag, min_lag, robust_priority, degree,
+                                                trans_type, LCEN_cutoff, LCEN_interaction, LCEN_transform_y, RF_n_estimators, RF_max_depth, RF_min_samples_leaf, RF_n_features,
+                                                learning_rate, SVM_gamma, SVM_C, SVM_epsilon, verbosity_level)
                     if verbosity_level: print(f'Completed model {this_model}')
                 elif this_model in {'MLP', 'RNN'}: # There may be other models if the user passed model_name manually
                     temp = cv.CV_mse(this_model, X_scale, y_scale, X_test_scale, y_test_scale, X, y, cv_type = cv_method, group = group, K_fold = K_fold, Nr = Nr,
@@ -440,9 +448,10 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
                     X_nest_scale, X_nest_scale_val, y_nest_scale, y_nest_scale_val = train_test_split(X_scale, y_scale, test_size = 1/K_fold, random_state = index_out)
                     for index, this_model in enumerate(model_name):
                         if this_model in {'LCEN', 'SVM', 'RF', 'GBDT', 'AdaB', 'EN', 'PLS', 'SPLS'}: # There may be other models if the user passed model_name manually
-                            MSE_val[index, index_out] = run_cv_ML(this_model, X_nest, y_nest, X_nest_scale, y_nest_scale, X_nest_val, y_nest_val, X_nest_scale_val,
-                                    y_nest_scale_val, cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, min_lag, robust_priority, degree, trans_type, LCEN_cutoff, LCEN_transform_y,
-                                    LCEN_interaction, RF_n_estimators, RF_max_depth, RF_min_samples_leaf, RF_n_features, learning_rate, SVM_gamma, SVM_C, SVM_epsilon, verbosity_level, True)
+                            MSE_val[index, index_out] = run_cv_ML(this_model, X_nest, y_nest, X_nest_scale, y_nest_scale, X_nest_val, y_nest_val, X_nest_scale_val, y_nest_scale_val,
+                                    cv_method, group, K_fold, Nr, scale_X, scale_y, l1_ratio, alpha, SPLS_K, SPLS_eta, lag, min_lag, robust_priority, degree, trans_type,
+                                    LCEN_cutoff, LCEN_transform_y, LCEN_interaction, RF_n_estimators, RF_max_depth, RF_min_samples_leaf, RF_n_features, learning_rate, SVM_gamma,
+                                    SVM_C, SVM_epsilon, verbosity_level, True)
             else:
                 from sklearn.model_selection import LeaveOneGroupOut
                 MSE_val = np.empty((len(model_name), len(np.unique(group)))) * np.nan
@@ -453,8 +462,9 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
                     for index, this_model in enumerate(model_name):
                         if this_model in {'LCEN', 'SVM', 'RF', 'GBDT', 'AdaB', 'EN', 'PLS', 'SPLS'}: # There may be other models if the user passed model_name manually
                             MSE_val[index, index_out] = run_cv_ML(this_model, X[train], y[train], X_scale[train], y_scale[train], X[val], y[val], X_scale[val], y_scale[val],
-                                    cv_method, group[train], K_fold, Nr, alpha, l1_ratio, lag, min_lag, robust_priority, degree, trans_type, LCEN_cutoff, LCEN_interaction, LCEN_transform_y,
-                                    RF_n_estimators, RF_max_depth, RF_min_samples_leaf, RF_n_features, learning_rate, SVM_gamma, SVM_C, SVM_epsilon, verbosity_level, True)
+                                    cv_method, group[train], K_fold, Nr, scale_X, scale_y, l1_ratio, alpha, SPLS_K, SPLS_eta, lag, min_lag, robust_priority, degree,
+                                    trans_type, LCEN_cutoff, LCEN_interaction, LCEN_transform_y, RF_n_estimators, RF_max_depth, RF_min_samples_leaf, RF_n_features,
+                                    learning_rate, SVM_gamma, SVM_C, SVM_epsilon, verbosity_level, True)
 
             # Nested CV MSE results
             time_now = '-'.join([str(elem) for elem in localtime()[:6]]) # YYYY-MM-DD-hh-mm-ss
@@ -479,8 +489,9 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
             # Final model fitting
             local_selected_model = model_name[np.nanargmin(np.mean(MSE_val, axis = 1))]
             fitting_result[local_selected_model], _ = run_cv_ML(local_selected_model, X, y, X_scale, y_scale, X_test, y_test, X_test_scale, y_test_scale,
-                    cv_method, group, K_fold, Nr, alpha, l1_ratio, lag, min_lag, robust_priority, degree, trans_type, LCEN_cutoff, LCEN_interaction, LCEN_transform_y,
-                    RF_n_estimators, RF_max_depth, RF_min_samples_leaf, RF_n_features, learning_rate, SVM_gamma, SVM_C, SVM_epsilon, verbosity_level)
+                    cv_method, group, K_fold, Nr, scale_X, scale_y, l1_ratio, alpha, SPLS_K, SPLS_eta, lag, min_lag, robust_priority, degree, trans_type,
+                    LCEN_cutoff, LCEN_interaction, LCEN_transform_y, RF_n_estimators, RF_max_depth, RF_min_samples_leaf, RF_n_features, learning_rate,
+                    SVM_gamma, SVM_C, SVM_epsilon, verbosity_level)
 
     # Finding the best model
     for idx, entry in enumerate(fitting_result): # TODO: this will probably not work with OLS, since it doesn't have a mse_val entry (see above)
@@ -592,8 +603,8 @@ def load_file(filename):
         raise ValueError(f'Please provide a filename with extension in {{.txt, .csv, .tsv, .xls, .xlsx, .npy}}. You passed {filename}')
     return my_file
 
-def run_cv_ML(model_index, X_train, y_train, X_train_scaled, y_train_scaled, X_test, y_test, X_test_scaled, y_test_scaled, cv_method, group, K_fold, Nr,
-              alpha, l1_ratio, lag, min_lag, robust_priority, degree, trans_type, LCEN_cutoff, LCEN_interaction, LCEN_transform_y, RF_n_estimators,
+def run_cv_ML(model_index, X_train, y_train, X_train_scaled, y_train_scaled, X_test, y_test, X_test_scaled, y_test_scaled, cv_method, group, K_fold, Nr, scale_X, scale_y,
+              l1_ratio, alpha, SPLS_K, SPLS_eta, lag, min_lag, robust_priority, degree, trans_type, LCEN_cutoff, LCEN_interaction, LCEN_transform_y, RF_n_estimators,
               RF_max_depth, RF_min_samples_leaf, RF_n_features, learning_rate, SVM_gamma, SVM_C, SVM_epsilon, verbosity_level, for_nested_validation = False):
     """
     Runs a nondynamic model for CV or final-run purposes. Automatically called by SPA.
@@ -613,41 +624,44 @@ def run_cv_ML(model_index, X_train, y_train, X_train_scaled, y_train_scaled, X_t
         X_val_scaled, y_val_scaled = X_test_scaled, y_test_scaled
 
         if model_index == 'LCEN':
-            _, _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train, y_train, X_val, y_val, None, None, cv_method, K_fold, Nr, group = group, alpha = alpha,
-                    l1_ratio = l1_ratio, lag = lag, min_lag = min_lag, label_name = True, robust_priority = robust_priority, degree = degree, trans_type = trans_type,
-                    LCEN_cutoff = LCEN_cutoff, LCEN_interaction = LCEN_interaction, LCEN_transform_y = LCEN_transform_y, verbosity_level = verbosity_level)
+            _, _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train, y_train, X_val, y_val, None, None, cv_method, K_fold, Nr, scale_X = scale_X, scale_y = scale_y,
+                    group = group, alpha = alpha, l1_ratio = l1_ratio, lag = lag, min_lag = min_lag, label_name = True, robust_priority = robust_priority, degree = degree,
+                    trans_type = trans_type, LCEN_cutoff = LCEN_cutoff, LCEN_interaction = LCEN_interaction, LCEN_transform_y = LCEN_transform_y, verbosity_level = verbosity_level)
         elif model_index in {'RF', 'GBDT', 'AdaB'}:
-            _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, X_train, y_train, cv_method,
-                    K_fold, Nr, group = group, robust_priority = robust_priority, RF_n_estimators = RF_n_estimators, RF_max_depth = RF_max_depth,
+            _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, X_train, y_train, cv_method, K_fold, Nr,
+                    scale_X = scale_X, scale_y = scale_y, group = group, robust_priority = robust_priority, RF_n_estimators = RF_n_estimators, RF_max_depth = RF_max_depth,
                     RF_min_samples_leaf = RF_min_samples_leaf, RF_n_features = RF_n_features, learning_rate = learning_rate, verbosity_level = verbosity_level)
         elif model_index == 'SVM':
-            _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, X_train, y_train, cv_method,
-                    K_fold, Nr, group = group, robust_priority = robust_priority, SVM_gamma = SVM_gamma, SVM_C = SVM_C, SVM_epsilon = SVM_epsilon, verbosity_level = verbosity_level)
+            _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, X_train, y_train, cv_method, K_fold, Nr, scale_X = scale_X,
+                    scale_y = scale_y, group = group, robust_priority = robust_priority, SVM_gamma = SVM_gamma, SVM_C = SVM_C, SVM_epsilon = SVM_epsilon, verbosity_level = verbosity_level)
         else: # EN, PLS, and SPLS
-            _, _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, X_train, y_train, cv_method,
-                    K_fold, Nr, group = group, alpha = alpha, l1_ratio = l1_ratio, robust_priority = robust_priority, verbosity_level = verbosity_level)
+            _, _, _, _, mse_val, _, _, _ = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_val_scaled, y_val_scaled, X_train, y_train, cv_method, K_fold, Nr, scale_X = scale_X,
+                    scale_y = scale_y, group = group, alpha = alpha, l1_ratio = l1_ratio, SPLS_K = SPLS_K, SPLS_eta = SPLS_eta, robust_priority = robust_priority, verbosity_level = verbosity_level)
         return mse_val
     else:
         if model_index == 'LCEN':
             model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train, y_train, X_test, y_test, None, None,
-                    cv_method, K_fold, Nr, group = group, alpha = alpha, l1_ratio = l1_ratio, lag = lag, min_lag = min_lag, label_name = True, robust_priority = robust_priority,
-                    degree = degree, trans_type = trans_type, LCEN_cutoff = LCEN_cutoff, LCEN_interaction = LCEN_interaction, LCEN_transform_y = LCEN_transform_y, verbosity_level = verbosity_level)
+                    cv_method, K_fold, Nr, scale_X = scale_X, scale_y = scale_y, group = group, alpha = alpha, l1_ratio = l1_ratio, lag = lag, min_lag = min_lag, label_name = True,
+                    robust_priority = robust_priority, degree = degree, trans_type = trans_type, LCEN_cutoff = LCEN_cutoff, LCEN_interaction = LCEN_interaction,
+                    LCEN_transform_y = LCEN_transform_y, verbosity_level = verbosity_level)
             fitting_result = {'model_hyper': model_hyper, 'final_model': final_model, 'model_params': model_params, 'mse_train': mse_train, 'mse_val': mse_val,
                               'mse_test': mse_test, 'yhat_train': yhat_train, 'yhat_test': yhat_test}
         elif model_index in {'RF', 'GBDT', 'AdaB'}:
             model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled, y_test_scaled,
-                    X_train, y_train, cv_method, K_fold, Nr, group = group, robust_priority = robust_priority, RF_n_estimators = RF_n_estimators, RF_max_depth = RF_max_depth,
-                    RF_min_samples_leaf = RF_min_samples_leaf, RF_n_features = RF_n_features, learning_rate = learning_rate, verbosity_level = verbosity_level)
+                    X_train, y_train, cv_method, K_fold, Nr, scale_X = scale_X, scale_y = scale_y, group = group, robust_priority = robust_priority, RF_n_estimators = RF_n_estimators,
+                    RF_max_depth = RF_max_depth, RF_min_samples_leaf = RF_min_samples_leaf, RF_n_features = RF_n_features, learning_rate = learning_rate, verbosity_level = verbosity_level)
             fitting_result = {'model_hyper': model_hyper, 'final_model': final_model, 'mse_train': mse_train, 'mse_val': mse_val, 'mse_test': mse_test,
                               'yhat_train': yhat_train, 'yhat_test': yhat_test}
         elif model_index == 'SVM':
             model_hyper, final_model, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled, y_test_scaled,
-                    X_train, y_train, cv_method, K_fold, Nr, group = group, robust_priority = robust_priority, SVM_gamma = SVM_gamma, SVM_C = SVM_C, SVM_epsilon = SVM_epsilon, verbosity_level = verbosity_level)
+                    X_train, y_train, cv_method, K_fold, Nr, scale_X = scale_X, scale_y = scale_y, group = group, robust_priority = robust_priority, SVM_gamma = SVM_gamma, SVM_C = SVM_C,
+                    SVM_epsilon = SVM_epsilon, verbosity_level = verbosity_level)
             fitting_result = {'model_hyper': model_hyper, 'final_model': final_model, 'mse_train': mse_train, 'mse_val': mse_val, 'mse_test': mse_test,
                               'yhat_train': yhat_train, 'yhat_test': yhat_test}
         else: # EN, PLS, and SPLS
             model_hyper, final_model, model_params, mse_train, mse_test, yhat_train, yhat_test, mse_val = cv.CV_mse(model_index, X_train_scaled, y_train_scaled, X_test_scaled,
-                    y_test_scaled, X_train, y_train, cv_method, K_fold, Nr, group = group, alpha = alpha, l1_ratio = l1_ratio, robust_priority = robust_priority, verbosity_level = verbosity_level)
+                    y_test_scaled, X_train, y_train, cv_method, K_fold, Nr, scale_X = scale_X, scale_y = scale_y, group = group, alpha = alpha, l1_ratio = l1_ratio, SPLS_K = SPLS_K,
+                    SPLS_eta = SPLS_eta, robust_priority = robust_priority, verbosity_level = verbosity_level)
             fitting_result = {'model_hyper': model_hyper, 'final_model': final_model, 'model_params': model_params, 'mse_train': mse_train, 'mse_val': mse_val,
                               'mse_test': mse_test, 'yhat_train': yhat_train, 'yhat_test': yhat_test}
         return OrderedDict(fitting_result), mse_val
