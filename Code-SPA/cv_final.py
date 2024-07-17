@@ -122,7 +122,11 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         Non-default hyperparameters for model fitting.
     """
     # Setting up some general kwargs
-    if 'robust_priority' not in kwargs: # This should not be the case unless the user called this function manually, which is not recommended
+    if 'scale_X' not in kwargs: # This should not be the case unless the user called this function manually, which is not recommended
+        kwargs['scale_X'] = True
+    if 'scale_y' not in kwargs:
+        kwargs['scale_y'] = True
+    if 'robust_priority' not in kwargs:
         kwargs['robust_priority'] = False
     if 'l1_ratio' not in kwargs:
         kwargs['l1_ratio'] = [0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.97, 0.99]
@@ -142,15 +146,23 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
 
         with Parallel(n_jobs = -1) as PAR:
             for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
-                # Rescaling to avoid validation dataset leakage
-                scaler_x = StandardScaler(with_mean=True, with_std=True)
-                scaler_x.fit(X_train)
-                X_train_scale = scaler_x.transform(X_train)
-                X_val_scale = scaler_x.transform(X_val)
-                scaler_y = StandardScaler(with_mean=True, with_std=True)
-                scaler_y.fit(y_train)
-                y_train_scale = scaler_y.transform(y_train)
-                y_val_scale = scaler_y.transform(y_val)
+                # Rescaling here to avoid validation dataset leakage
+                if kwargs['scale_X'] and len(X.shape) == 2 and X.shape[1] > 0: # StandardScaler doesn't work with 3D arrays or with arrays that are 2D but empty in one dimension
+                    scaler_x = StandardScaler(with_mean=True, with_std=True)
+                    scaler_x.fit(X_train)
+                    X_train_scale = scaler_x.transform(X_train)
+                    X_val_scale = scaler_x.transform(X_val)
+                else:
+                    X_train_scale = X_train
+                    X_val_scale = X_val
+                if kwargs['scale_y']:
+                    scaler_y = StandardScaler(with_mean=True, with_std=True)
+                    scaler_y.fit(y_train)
+                    y_train_scale = scaler_y.transform(y_train)
+                    y_val_scale = scaler_y.transform(y_val)
+                else:
+                    y_train_scale = y_train
+                    y_val_scale = y_val
                 temp = PAR(delayed(rm.EN_fitting)(X_train_scale, y_train_scale, X_val_scale, y_val_scale, this_prod[1], this_prod[0]) for this_prod in hyperparam_prod)
                 _, Var[:, :, counter], _, MSE_result[:, counter], _, _ = zip(*temp)
 
@@ -175,77 +187,44 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test = rm.OLS_fitting(X, y, X_test, y_test)
         return(hyperparams, EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
-    elif model_name == 'SPLS':
-        if not(cv_type.startswith('Group')) and 'K' not in kwargs: # For non-grouped CV types
-            kwargs['K'] = np.linspace( 1, min(X.shape[1], int((K_fold-1)/K_fold * X.shape[0] - 1)), min(X.shape[1], int((K_fold-1)/K_fold * X.shape[0] - 1)), dtype = np.uint64)
-        elif 'K' not in kwargs:
-            kwargs['K'] = np.linspace(1, min(X.shape[1], X.shape[0]-1), min(X.shape[1], X.shape[0]-1), dtype = np.uint64)
-        if 'eta' not in kwargs and model_name == 'SPLS':
-            kwargs['eta'] = np.linspace(0, 1, 20, endpoint = False)[::-1]
-        elif 'eta' not in kwargs and model_name == 'PLS': # Normal PLS is simply SPLS with eta = 0
-            kwargs['eta'] = np.array([0])
+    elif model_name == 'SPLS' or model_name == 'PLS':
+        if not(cv_type.startswith('Group')) and ('SPLS_K' not in kwargs or kwargs['SPLS_K'] is None): # For non-grouped CV types
+            kwargs['SPLS_K'] = np.linspace( 1, min(X.shape[1], int((K_fold-1)/K_fold * X.shape[0] - 1)), min(X.shape[1], int((K_fold-1)/K_fold * X.shape[0] - 1)), dtype = np.uint64)
+        elif 'SPLS_K' not in kwargs or kwargs['SPLS_K'] is None:
+            kwargs['SPLS_K'] = np.linspace(1, min(X.shape[1], X.shape[0]-1), min(X.shape[1], X.shape[0]-1), dtype = np.uint64)
+        if ('SPLS_eta' not in kwargs or kwargs['SPLS_eta'] is None) and model_name == 'SPLS':
+            kwargs['SPLS_eta'] = np.linspace(0, 1, 20, endpoint = False)
+        elif 'SPLS_eta' not in kwargs or kwargs['SPLS_eta'] is None or model_name == 'PLS': # Normal PLS is simply SPLS with eta = 0
+            kwargs['SPLS_eta'] = np.array([0])
 
-        MSE_result = np.empty((len(kwargs['K']), len(kwargs['eta']), K_fold*Nr)) * np.nan
-        if kwargs['robust_priority']:
-            Var = np.empty((len(kwargs['K']), len(kwargs['eta']), K_fold*Nr)) * np.nan
-
-        for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
-            # Rescaling to avoid validation dataset leakage
-            scaler_x_train = StandardScaler(with_mean=True, with_std=True)
-            scaler_x_train.fit(X_train)
-            X_train_scale = scaler_x_train.transform(X_train)
-            X_val_scale = scaler_x_train.transform(X_val)
-            scaler_y_train = StandardScaler(with_mean=True, with_std=True)
-            scaler_y_train.fit(y_train)
-            y_train_scale = scaler_y_train.transform(y_train)
-            y_val_scale = scaler_y_train.transform(y_val)
-            for i in range(len(kwargs['K'])):
-                for j in range(len(kwargs['eta'])):
-                    _, variable, _, mse, _, _ = rm.SPLS_fitting(X_train_scale, y_train_scale, X_val_scale, y_val_scale, K = int(kwargs['K'][i]), eta = kwargs['eta'][j])
-                    MSE_result[i, j, counter] = mse
-                    if kwargs['robust_priority']:
-                        Var[i, j, counter] = np.sum(variable.flatten() != 0)
-
-        MSE_mean = np.nanmean(MSE_result, axis = 2)
-        # Min MSE value (first occurrence)
-        ind = np.unravel_index(np.nanargmin(MSE_mean), MSE_mean.shape)
-        if kwargs['robust_priority']:
-            MSE_std = np.nanstd(MSE_result, axis = 2)
-            MSE_min = MSE_mean[ind]
-            MSE_bar = MSE_min + MSE_std[ind]
-            Var_num = np.nansum(Var, axis = 2)
-            ind = np.nonzero( Var_num == np.nanmin(Var_num[MSE_mean < MSE_bar]) ) # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
-            ind = (ind[0][0], ind[1][0])
-
-        # Hyperparameter setup
-        K = int(kwargs['K'][ind[0]])
-        eta = kwargs['eta'][ind[1]]
-        hyperparams = {'K': int(K), 'eta': eta}
-        # Fit the final model
-        SPLS_model, SPLS_params, mse_train, mse_test, yhat_train, yhat_test = rm.SPLS_fitting(X, y, X_test, y_test, eta = eta, K = K)
-        return(hyperparams, SPLS_model, SPLS_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
-
-    elif model_name == 'PLS':  # TODO: merge with SPLS, since this is just a special case with eta = 0
-        if not(cv_type.casefold().startswith('group')) and 'K' not in kwargs: # For non-grouped CV types
-            kwargs['K'] = np.linspace(1, min(X.shape[1], int((K_fold-1)/K_fold * X.shape[0] - 1)), min(X.shape[1], int((K_fold-1)/K_fold * X.shape[0] - 1)), dtype = int)
-        elif 'K' not in kwargs:
-            kwargs['K'] = np.linspace(1, min(X.shape[1], X.shape[0]-1), min(X.shape[1], X.shape[0]-1), dtype = int)
-
-        MSE_result = np.zeros((len(kwargs['K']), K_fold*Nr))
+        hyperparam_prod = list(product(kwargs['SPLS_K'], kwargs['SPLS_eta']))
+        MSE_result = np.empty((len(kwargs['SPLS_K']) * len(kwargs['SPLS_eta']), K_fold*Nr)) * np.nan
+        # Var = np.empty((len(kwargs['SPLS_K']) * len(kwargs['SPLS_eta']), X_unscaled.shape[1], K_fold*Nr)) * np.nan
+        Var = np.empty((len(kwargs['SPLS_K']) * len(kwargs['SPLS_eta']), K_fold*Nr)) * np.nan # Var is n_hyperparams x n_folds because rm.SPLS_fitting() can return a different number of variables each time, so we do some processing to directly save the number of variables in the Var array
 
         with Parallel(n_jobs = -1) as PAR:
             for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
-                # Rescaling to avoid validation dataset leakage
-                scaler_x_train = StandardScaler(with_mean=True, with_std=True)
-                scaler_x_train.fit(X_train)
-                X_train_scale = scaler_x_train.transform(X_train)
-                X_val_scale = scaler_x_train.transform(X_val)
-                scaler_y_train = StandardScaler(with_mean=True, with_std=True)
-                scaler_y_train.fit(y_train)
-                y_train_scale = scaler_y_train.transform(y_train)
-                y_val_scale = scaler_y_train.transform(y_val)
-                temp = PAR(delayed(rm.PLS_fitting)(X_train_scale, y_train_scale, X_val_scale, y_val_scale, this_K) for this_K in kwargs['K'])
-                _, _, _, MSE_result[:, counter], _, _ = zip(*temp)
+                # Rescaling here to avoid validation dataset leakage
+                if kwargs['scale_X'] and len(X.shape) == 2 and X.shape[1] > 0: # StandardScaler doesn't work with 3D arrays or with arrays that are 2D but empty in one dimension
+                    scaler_x = StandardScaler(with_mean=True, with_std=True)
+                    scaler_x.fit(X_train)
+                    X_train_scale = scaler_x.transform(X_train)
+                    X_val_scale = scaler_x.transform(X_val)
+                else:
+                    X_train_scale = X_train
+                    X_val_scale = X_val
+                if kwargs['scale_y']:
+                    scaler_y = StandardScaler(with_mean=True, with_std=True)
+                    scaler_y.fit(y_train)
+                    y_train_scale = scaler_y.transform(y_train)
+                    y_val_scale = scaler_y.transform(y_val)
+                else:
+                    y_train_scale = y_train
+                    y_val_scale = y_val
+                temp = PAR(delayed(rm.SPLS_fitting)(X_train_scale, y_train_scale, X_val_scale, y_val_scale, this_prod[0], this_prod[1]) for this_prod in hyperparam_prod)
+                # _, Var[:, :, counter], _, MSE_result[:, counter], _, _ = zip(*temp)
+                _, temp_var_count, _, MSE_result[:, counter], _, _ = zip(*temp)
+                Var[:, counter] = [np.sum(elem != 0) for elem in temp_var_count]
 
         MSE_mean = np.nanmean(MSE_result, axis = 1)
         # Min MSE value (first occurrence)
@@ -254,20 +233,15 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             MSE_std = np.nanstd(MSE_result, axis = 1)
             MSE_min = MSE_mean[ind]
             MSE_bar = MSE_min + MSE_std[ind]
-            ind = np.nonzero( kwargs['K'] == np.nanmin(kwargs['K'][MSE_mean < MSE_bar]) )[0][0] # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
+            Var_num = np.nansum(Var, axis = 1) # Here, Var is n_hyperparams x n_folds, and Var_num is n_hyperparams
+            ind = np.nonzero( Var_num == np.nanmin(Var_num[MSE_mean < MSE_bar]) )[0][0] # Hyperparams with the lowest number of variables but still within one stdev of the best MSE
 
         # Hyperparameter setup
-        K = int(kwargs['K'][ind])
-        hyperparams = {'K': K}
-
+        K, eta = hyperparam_prod[ind]
+        hyperparams = {'K': int(K), 'eta': eta}
         # Fit the final model
-        PLS_model = PLSRegression(K, scale = False, tol = eps).fit(X, y)
-        PLS_params = PLS_model.coef_.squeeze()
-        yhat_train = np.dot(X, PLS_params)
-        yhat_test = np.dot(X_test, PLS_params)
-        mse_train = MSE(yhat_train.flatten(), y.flatten())
-        mse_test = MSE(yhat_test.flatten(), y_test.flatten())
-        return(hyperparams, PLS_model, PLS_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
+        SPLS_model, SPLS_params, mse_train, mse_test, yhat_train, yhat_test = rm.SPLS_fitting(X, y, X_test, y_test, eta = eta, K = K)
+        return(hyperparams, SPLS_model, SPLS_params, mse_train, mse_test, yhat_train, yhat_test, MSE_mean[ind])
 
     elif model_name == 'LCEN':
         kwargs['model_name'] = model_name # Sent to the joblib fun
@@ -288,11 +262,12 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         if 'LCEN_transform_y' not in kwargs:
             kwargs['LCEN_transform_y'] = False
         kwargs['selection'] = None # for the _LCEN_joblib_fun called below
-
+        kwargs['all_pos_X'] = np.all(X >= 0, axis = 0) & np.all(X_test >= 0, axis = 0) # Whether all entries in X are positive; used in _feature_trans() inside regression_models.py
+        kwargs['all_pos_y'] = np.all(y >= 0, axis = 0) & np.all(y_test >= 0, axis = 0) # Whether all entries in y are positive; used in _feature_trans() inside regression_models.py
         # First run for variable selection using a L1_ratio of 1 (that is, only using an L1 penalty)
         hyperparam_prod = list(product(kwargs['degree'], [1], kwargs['alpha'], kwargs['lag']))
         print(f'Beginning variable selection runs. There are {len(hyperparam_prod)} hyperparameter combinations')
-        with Parallel(n_jobs = -1) as PAR:
+        with Parallel(n_jobs = 1) as PAR:
             if 'IC' in cv_type: # Information criterion
                 temp = PAR(delayed(_LCEN_joblib_fun)(X, y, X_test, y_test, eps, kwargs, prod_idx, this_prod) for prod_idx, this_prod in enumerate(hyperparam_prod))
                 temp = list(zip(*temp))[2] # To isolate the (AIC, AICc, BIC) tuple, which is the 3rd subentry of each entry in the original temp
@@ -315,8 +290,8 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                 ind = np.nanargmin(MSE_mean)
         # Run to obtain the coefficients when LCEN is run with L1_ratio = 1
         degree, l1_ratio, alpha, lag = hyperparam_prod[ind]
-        _, LCEN_params, _, _, _, _, label_names, _ = rm.LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree, lag, kwargs['min_lag'], tol = eps,
-                                            trans_type = kwargs['trans_type'], interaction = kwargs['LCEN_interaction'], selection = None, transform_y = kwargs['LCEN_transform_y'])
+        _, LCEN_params, _, _, _, _, label_names, _ = rm.LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree, lag, kwargs['min_lag'], kwargs['trans_type'],
+                                        kwargs['LCEN_interaction'], kwargs['selection'], kwargs['LCEN_transform_y'], kwargs['all_pos_X'], kwargs['all_pos_y'])
         kwargs['selection'] = (np.abs(LCEN_params) >= kwargs['LCEN_cutoff'])&(np.abs(LCEN_params) != 0) # 1st clip step
 
         # Second run with a free L1_ratio but fixed degree and lag
@@ -356,8 +331,8 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         degree, l1_ratio, alpha, lag = hyperparam_prod[ind]
         hyperparams = {'degree': degree, 'l1_ratio': l1_ratio, 'alpha': alpha, 'lag': lag, 'cutoff': kwargs['LCEN_cutoff'], 'trans_type': kwargs['trans_type']}
         # Final run with the test set and best hyperparameters
-        LCEN_model, LCEN_params, _, _, _, _, label_names, ICs = rm.LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree, lag, kwargs['min_lag'], tol = eps,
-                                            trans_type = kwargs['trans_type'], interaction = kwargs['LCEN_interaction'], selection = kwargs['selection'], transform_y = kwargs['LCEN_transform_y'])
+        LCEN_model, LCEN_params, _, _, _, _, label_names, ICs = rm.LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree, lag, kwargs['min_lag'], kwargs['trans_type'],
+                                        kwargs['LCEN_interaction'], kwargs['selection'], kwargs['LCEN_transform_y'], kwargs['all_pos_X'], kwargs['all_pos_y'])
         label_names = label_names[kwargs['selection']]
         # Removing the features that had small coefficients after the final model selection (2nd clip step)
         final_selection = (np.abs(LCEN_params) >= kwargs['LCEN_cutoff'])&(np.abs(LCEN_params) != 0)
@@ -365,7 +340,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         label_names = label_names[final_selection].reshape(-1)
         # Unscaling the model coefficients as per stackoverflow.com/questions/23642111/how-to-unscale-the-coefficients-from-an-lmer-model-fitted-with-a-scaled-respon
         if not kwargs['LCEN_transform_y'] and X.shape[1] > 0:
-            X, X_test, _ = rm._feature_trans(X, X_test, degree, kwargs['LCEN_interaction'], kwargs['trans_type'])
+            X, X_test, _ = rm._feature_trans(X, X_test, degree, kwargs['LCEN_interaction'], kwargs['trans_type'], kwargs['all_pos_X'], kwargs['all_pos_y'])
         if lag > 0:
             X_temp = np.hstack([X[lag-1-idx : -idx-1, :] for idx in range(kwargs['min_lag'], lag)]) # The additional entries representing the previous times (t-1 to t-lag)
             y_temp = np.hstack([y[lag-1-idx : -idx-1] for idx in range(kwargs['min_lag'], lag)])
@@ -375,7 +350,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             y = y[lag:] # Shorterning y
             X_test = np.hstack((X_test, X_test_temp, y_test_temp))
         if kwargs['LCEN_transform_y']: # Feature transformation that includes the y features in the X and X_test variables
-            X, X_test, _ = rm._feature_trans(X, X_test, degree, kwargs['LCEN_interaction'], kwargs['trans_type'])
+            X, X_test, _ = rm._feature_trans(X, X_test, degree, kwargs['LCEN_interaction'], kwargs['trans_type'], kwargs['all_pos_X'], kwargs['all_pos_y'])
         LCEN_params_unscaled = np.zeros_like(LCEN_params)
         y_vars = np.array(['y' in label_names[idx] for idx in range(len(label_names))])
         if len(label_names): # if this is false, no variables were selected
@@ -432,15 +407,23 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         with Parallel(n_jobs = -1) as PAR:
             for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
                 print(f'{model_name}: Beginning fold {counter+1}', end = '\r')
-                # Rescaling to avoid validation dataset leakage
-                scaler_x_train = StandardScaler(with_mean=True, with_std=True)
-                scaler_x_train.fit(X_train)
-                X_train_scale = scaler_x_train.transform(X_train)
-                X_val_scale = scaler_x_train.transform(X_val)
-                scaler_y_train = StandardScaler(with_mean=True, with_std=True)
-                scaler_y_train.fit(y_train)
-                y_train_scale = scaler_y_train.transform(y_train)
-                y_val_scale = scaler_y_train.transform(y_val)
+                # Rescaling here to avoid validation dataset leakage
+                if kwargs['scale_X'] and len(X.shape) == 2 and X.shape[1] > 0: # StandardScaler doesn't work with 3D arrays or with arrays that are 2D but empty in one dimension
+                    scaler_x = StandardScaler(with_mean=True, with_std=True)
+                    scaler_x.fit(X_train)
+                    X_train_scale = scaler_x.transform(X_train)
+                    X_val_scale = scaler_x.transform(X_val)
+                else:
+                    X_train_scale = X_train
+                    X_val_scale = X_val
+                if kwargs['scale_y']:
+                    scaler_y = StandardScaler(with_mean=True, with_std=True)
+                    scaler_y.fit(y_train)
+                    y_train_scale = scaler_y.transform(y_train)
+                    y_val_scale = scaler_y.transform(y_val)
+                else:
+                    y_train_scale = y_train
+                    y_val_scale = y_val
                 temp = PAR(delayed(rm.forest_fitting)(X_train_scale, y_train_scale, X_val_scale, y_val_scale, this_prod[0], this_prod[1], this_prod[2], this_prod[3], this_prod[4]) for this_prod in hyperparam_prod)
                 _, _, MSE_result[:, counter], _, _ = zip(*temp)
 
@@ -489,15 +472,23 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         with Parallel(n_jobs = -1) as PAR:
             for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
                 print(f'{model_name}: Beginning fold {counter+1}', end = '\r')
-                # Rescaling to avoid validation dataset leakage
-                scaler_x_train = StandardScaler(with_mean=True, with_std=True)
-                scaler_x_train.fit(X_train)
-                X_train_scale = scaler_x_train.transform(X_train)
-                X_val_scale = scaler_x_train.transform(X_val)
-                scaler_y_train = StandardScaler(with_mean=True, with_std=True)
-                scaler_y_train.fit(y_train)
-                y_train_scale = scaler_y_train.transform(y_train)
-                y_val_scale = scaler_y_train.transform(y_val)
+                # Rescaling here to avoid validation dataset leakage
+                if kwargs['scale_X'] and len(X.shape) == 2 and X.shape[1] > 0: # StandardScaler doesn't work with 3D arrays or with arrays that are 2D but empty in one dimension
+                    scaler_x = StandardScaler(with_mean=True, with_std=True)
+                    scaler_x.fit(X_train)
+                    X_train_scale = scaler_x.transform(X_train)
+                    X_val_scale = scaler_x.transform(X_val)
+                else:
+                    X_train_scale = X_train
+                    X_val_scale = X_val
+                if kwargs['scale_y']:
+                    scaler_y = StandardScaler(with_mean=True, with_std=True)
+                    scaler_y.fit(y_train)
+                    y_train_scale = scaler_y.transform(y_train)
+                    y_val_scale = scaler_y.transform(y_val)
+                else:
+                    y_train_scale = y_train
+                    y_val_scale = y_val
                 temp = PAR(delayed(rm.SVM_fitting)(X_train_scale, y_train_scale, X_val_scale, y_val_scale, this_prod[0], this_prod[1], this_prod[2]) for this_prod in hyperparam_prod)
                 _, _, MSE_result[:, counter], _, _ = zip(*temp)
 
@@ -530,15 +521,23 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
 
         with Parallel(n_jobs = -1) as PAR:
             for counter, (X_train, y_train, X_val, y_val) in enumerate(CVpartition(X_unscaled, y_unscaled, Type = cv_type, K = K_fold, Nr = Nr, group = group)):
-                # Rescaling to avoid validation dataset leakage
-                scaler_x_train = StandardScaler(with_mean=True, with_std=True)
-                scaler_x_train.fit(X_train)
-                X_train_scale = scaler_x_train.transform(X_train)
-                X_val_scale = scaler_x_train.transform(X_val)
-                scaler_y_train = StandardScaler(with_mean=True, with_std=True)
-                scaler_y_train.fit(y_train)
-                y_train_scale = scaler_y_train.transform(y_train)
-                y_val_scale = scaler_y_train.transform(y_val)
+                # Rescaling here to avoid validation dataset leakage
+                if kwargs['scale_X'] and len(X.shape) == 2 and X.shape[1] > 0: # StandardScaler doesn't work with 3D arrays or with arrays that are 2D but empty in one dimension
+                    scaler_x = StandardScaler(with_mean=True, with_std=True)
+                    scaler_x.fit(X_train)
+                    X_train_scale = scaler_x.transform(X_train)
+                    X_val_scale = scaler_x.transform(X_val)
+                else:
+                    X_train_scale = X_train
+                    X_val_scale = X_val
+                if kwargs['scale_y']:
+                    scaler_y = StandardScaler(with_mean=True, with_std=True)
+                    scaler_y.fit(y_train)
+                    y_train_scale = scaler_y.transform(y_train)
+                    y_val_scale = scaler_y.transform(y_val)
+                else:
+                    y_train_scale = y_train
+                    y_val_scale = y_val
                 temp = PAR(delayed(rm.AdaBoost_fitting)(X_train_scale, y_train_scale, X_val_scale, y_val_scale, this_prod[0], this_prod[1]) for this_prod in hyperparam_prod)
                 _, _, MSE_result[:, counter], _, _ = zip(*temp)
 
@@ -608,7 +607,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
         if 'scheduler_last_epoch' not in kwargs or kwargs['scheduler_last_epoch'] is None:
             kwargs['scheduler_last_epoch'] = kwargs['n_epochs'] - 30
         elif kwargs['scheduler_last_epoch'] < 0:
-            kwargs['scheduler_last_epoch'] = kwargs['n_epochs'] - kwargs['scheduler_last_epoch']
+            kwargs['scheduler_last_epoch'] = kwargs['n_epochs'] + kwargs['scheduler_last_epoch'] # scheduler_last_epoch is < 0, so n_epochs + scheduler_last_epoch < n_epochs
         if 'scheduler_warmup' not in kwargs:
             kwargs['scheduler_warmup'] = 10
         if 'val_loss_file' not in kwargs or kwargs['val_loss_file'] is None:
@@ -653,7 +652,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
                         if kwargs['verbosity_level'] >= 3:
                             print(f'Current fold: {counter+1}', end = '\r')
                         # Rescaling to avoid validation dataset leakage
-                        if kwargs['scale_X'] and len(X.shape) == 2: # StandardScaler doesn't work with 3D arrays
+                        if kwargs['scale_X'] and len(X.shape) == 2 and X.shape[1] > 0: # StandardScaler doesn't work with 3D arrays
                             scaler_x_train = StandardScaler(with_mean=True, with_std=True)
                             scaler_x_train.fit(X_train)
                             X_train_scale = torch.Tensor(scaler_x_train.transform(X_train))
@@ -836,7 +835,7 @@ def CV_mse(model_name, X, y, X_test, y_test, X_unscaled = None, y_unscaled = Non
             test_pred[idx*kwargs['batch_size']:(idx*kwargs['batch_size'])+len(pred), :] = pred
             test_y[idx*kwargs['batch_size']:(idx*kwargs['batch_size'])+len(y_finaleval)] = y_finaleval.squeeze()
         test_loss = loss_function(test_pred.squeeze(), test_y).item()
-        best_hyperparameters = {'RNN size': kwargs['RNN_layers'], 'MLP size': str(best_neurons), 'LR': best_LR, 'activation': best_act, 'batch_size': kwargs['batch_size'], 'weight_decay': kwargs['weight_decay'], 'scheduler': kwargs['scheduler']}
+        best_hyperparameters = {'RNN size': str(kwargs['RNN_layers']), 'MLP size': str(best_neurons), 'LR': best_LR, 'activation': best_act, 'batch_size': kwargs['batch_size'], 'n_epochs': kwargs['n_epochs'], 'weight_decay': kwargs['weight_decay'], 'scheduler': kwargs['scheduler']}
         if kwargs['scheduler'].casefold() in {'plateau', 'lambda', 'step', 'multistep', 'exponential'}:
             best_hyperparameters['scheduler_factor'] = kwargs['scheduler_factor']
         if kwargs['scheduler'].casefold() in {'plateau', 'step', 'multistep'}:
@@ -857,8 +856,8 @@ def _LCEN_joblib_fun(X_train, y_train, X_val, y_val, eps, kwargs, prod_idx, this
         print(f'Beginning run {prod_idx+1:4} of fold {counter+1:3}', end = '\r')
     elif prod_idx == 0 or not (prod_idx+1)%100: # IC -- no folds
         print(f'Beginning run {prod_idx+1:4}', end = '\r')
-    _, variable, _, mse, _, _, _, ICs = rm.LCEN_fitting(X_train, y_train, X_val, y_val, alpha, l1_ratio, degree, lag, kwargs['min_lag'], tol = eps,
-                            trans_type = kwargs['trans_type'], interaction = kwargs['LCEN_interaction'], selection = kwargs['selection'], transform_y = kwargs['LCEN_transform_y'])
+    _, variable, _, mse, _, _, _, ICs = rm.LCEN_fitting(X_train, y_train, X_val, y_val, alpha, l1_ratio, degree, lag, kwargs['min_lag'], kwargs['trans_type'],
+                            kwargs['LCEN_interaction'], kwargs['selection'], kwargs['LCEN_transform_y'], kwargs['all_pos_X'], kwargs['all_pos_y'])
     return mse, np.sum(variable.flatten() != 0), ICs
 
 class MyDataset(Dataset):
