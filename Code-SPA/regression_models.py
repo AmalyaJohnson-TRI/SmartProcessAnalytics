@@ -114,7 +114,7 @@ def EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter = 10000, tol = 1e
     mse_test = MSE(y_test, yhat_test)
     return (EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test)
 
-def LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, min_lag = 0, max_iter = 10000, tol = 1e-4, trans_type = 'all', interaction = True, selection = None, transform_y = False):
+def LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, min_lag = 0, trans_type = 'all', interaction = True, selection = None, transform_y = False, all_pos_X = True, all_pos_y = True):
     """
     Fits data using the LASSO-Clip-EN (LCEN) algorithm (doi.org/10.48550/arXiv.2402.17120).
     LCEN is a powerful, non-linear, and interpretable feature selection algorithm with considerable feature selection capabilities, model accuracy, and speed.
@@ -135,6 +135,12 @@ def LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, min
     lag : int, optional, default = 0
         Variable lags to be considered. A lag of L will make the model take into account ...
             variables from point xt to xt-L and from yt to yt-L.
+    min_lag : int < lag, optional, default = 0
+        The minimum lag used in autoregressive LCEN. Should be smaller than the smallest lag.
+        Useful when making N-points ahead predictions, in which case min_lag should be set to N-1 and ...
+            each entry in lag should be increased by N-1.
+            (e.g.: the default min_lag = 0 is used to make predictions 1 point ahead; a min_lag = 5 is
+            used to make predictions 6 points ahead, ignoring the first 5 points ahead when training.)
     trans_type : str in {'all', 'poly', 'simple_interaction'}, optional, default == 'all'
         Whether to include all transforms (polynomial, log, sqrt, and inverse), only polynomial transforms (and, ...
             optionally, interactions), or just interactions.
@@ -148,10 +154,15 @@ def LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, min
     transform_y : Bool, optional, default = False
         Whether to also perform transforms on the y measurements from previous timepoints
         Relevant only when lag > 0
+    all_pos_X, all_pos_y : bool, optional, default = True
+        Whether all entries in the X/y data are positive or also contain some negative entries. This is done to avoid taking ...
+            sqrt(k) for some k<0 when the features are transformed/expanded.
+        This used to be determined within _feature_trans(), but it leads to array size problems when some folds have negative ...
+            entries and some do not.
     """
     # Expanding the X features
     if not transform_y and X.shape[1] > 0:
-        X, X_test, label_names = _feature_trans(X, X_test, degree, interaction, trans_type)
+        X, X_test, label_names = _feature_trans(X, X_test, degree, interaction, trans_type, all_pos_X, all_pos_y)
     elif X.shape[1] == 0:
         label_names = np.array([])
     if transform_y:
@@ -168,7 +179,7 @@ def LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, min
         if not transform_y:
             label_names = np.concatenate((label_names, [elem + f'(t-{idx+1})' for idx in range(lag-min_lag) for elem in label_names], [f'y(t-{idx+1})' for idx in range(lag-min_lag)]))
     if transform_y: # Feature transformation that includes the y features in the X and X_test variables
-        X, X_test, label_names = _feature_trans(X, X_test, degree, interaction, trans_type)
+        X, X_test, label_names = _feature_trans(X, X_test, degree, interaction, trans_type, all_pos_X, all_pos_y)
         # Correcting the label names
         for idx in range(n_X_vars*(lag+1) + lag - 1, n_X_vars-1, -1): # xN to x(n_X_vars). In reverse order to avoid x11 to x19 being caught in x1, for example
             for elem_idx, elem in enumerate(label_names):
@@ -202,7 +213,7 @@ def LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, min
         yhat_train = np.zeros(y.shape) # Ok to be 0 because y is scaled --> mean(y) is approximately 0
         yhat_test = np.zeros(y_test.shape)
     else:
-        LCEN_model, LCEN_params, mse_train, mse_test, yhat_train, yhat_test = EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter, tol)
+        LCEN_model, LCEN_params, mse_train, mse_test, yhat_train, yhat_test = EN_fitting(X, y, X_test, y_test, alpha, l1_ratio)
     # Calculating information criteria values
     num_train = X.shape[0] # Typically written as n
     num_parameter = (LCEN_params!=0).flatten().sum() # Typically written as k
@@ -312,7 +323,7 @@ def AdaBoost_fitting(X, y, X_test, y_test, n_estimators = 50, learning_rate = 0.
 
     return (AdaB_model, mse_train, mse_test, yhat_train, yhat_test)
 
-def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type = 'all'):
+def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type = 'all', all_pos_X = True, all_pos_y = True):
     """
     A helper function that is automatically called by SPA.
     Performs non-linear transformations of X (and X_test). Transformations include polynomial transforms up to "degree", ...
@@ -337,6 +348,11 @@ def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type 
             optionally, interactions), or just interactions.
         The log, sqrt, and inverse terms never include interactions among the same transform type (such as ln(x1)*ln(x4)), but ...
             include some interactions among each other for the same variable (such as ln(x0)*1/x0, x0*sqrt(x0), etc.).
+    all_pos_X, all_pos_y : bool, optional, default = True
+        Whether all entries in the data are positive or also contain some negative entries. This is done to avoid taking ...
+            sqrt(k) for some k<0.
+        This used to be determined within this function, but it leads to array size problems when some folds have negative ...
+            entries and some do not.
     """
     X_test_out = None # Declaring this variable to avoid errors when doing the return statement
 
@@ -345,6 +361,8 @@ def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type 
     X_out = poly.fit_transform(X)
     label_names = poly.get_feature_names_out()
     interaction_column = np.array([' ' in elem for elem in label_names], dtype = bool) # To filter out interactions if user asked for a polynomial-only transform. Also for the log, sqrt, and inv terms below when poly_trans_only == False
+    number_y_entries = X.shape[1] - len(all_pos_X) # Additional y entries within the array X = total entries - X entries. Is != 0 only when LCEN_transform_y == True
+    all_pos = np.concatenate(( all_pos_X, np.tile(all_pos_y, number_y_entries) ))
     for idx in range(len(label_names)):
         label_names[idx] = label_names[idx].translate({ord(i): '*' for i in ' '}) # str.translate replaces the characters on the right of the for (in this case, a whitespace) with an asterisk
     if X_test is not None:
@@ -359,10 +377,10 @@ def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type 
     if trans_type.casefold() == 'all':
         # Setting up the transforms
         Xlog = np.where(X!=0, np.log(np.abs(X)), -50) # Avoiding log(0) = -inf
-        if X_test is not None: # Columns where all entries are >= 0 for sqrt
-            all_pos = np.all(X >= 0, axis = 0) & np.all(X_test >= 0, axis = 0)
-        else:
-            all_pos = np.all(X >= 0, axis = 0)
+        # if X_test is not None: # Columns where all entries are >= 0 for sqrt
+        #     all_pos = np.all(X >= 0, axis = 0) & np.all(X_test >= 0, axis = 0)
+        # else:
+        #     all_pos = np.all(X >= 0, axis = 0)
         Xsqrt = np.sqrt(X[:, all_pos])
         Xinv = 1/X
         Xinv[Xinv == np.inf] = 1e15
