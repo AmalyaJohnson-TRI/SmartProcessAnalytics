@@ -5,7 +5,7 @@ setup(
     author = 'Pedro Seber, forked from code by Vicky Sun',
     author_email = 'pseber@mit.edu',
     license = 'MIT',
-    version = '1.4.1',
+    version = '1.4.2',
     description = 'Smart Process Analytics (SPA) is a software package for automatic machine learning. Given user-input data (and optional user preferences), SPA automatically cross-validates and tests ML and DL models. Model types are selected based on the properties of the data, minimizing the risk of data-specific variance.',
     zip_safe = False,
     packages = find_packages(where = 'Code-SPA', include = ['SPA.py']),
