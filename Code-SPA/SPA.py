@@ -358,7 +358,7 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
     X = X_original.copy('F') # Switching to Fortran order to speed up Elastic Net (and LCEN) [but does not make any significant difference]
     y = y_original.copy('F')
     # Scaling the data
-    if scale_X and len(X.shape) == 2: # StandardScaler doesn't work with 3D arrays
+    if scale_X and len(X.shape) == 2 and X.shape[1] > 0: # StandardScaler doesn't work with 3D arrays or with arrays that are 2D but empty in one dimension
         scaler_x = StandardScaler(with_mean=True, with_std=True)
         scaler_x.fit(X)
         X_scale = scaler_x.transform(X)
@@ -376,7 +376,7 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
     if X_test_original is not None:
         X_test = X_test_original.copy('F')
         y_test = y_test_original.copy('F')
-        if scale_X and len(X.shape) == 2: # StandardScaler doesn't work with 3D arrays
+        if scale_X and len(X.shape) == 2 and X.shape[1] > 0: # StandardScaler doesn't work with 3D arrays
             X_test_scale = scaler_x.transform(X_test)
         else:
             X_test_scale = X_test
@@ -394,13 +394,13 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
 
     # Setting up a dict to save results (hyperparameters and predictions)
     fitting_result = {}
-    general_hyper = {'SPA version': '1.4.1', 'CV method': cv_method, 'Number of folds (K)': K_fold} # Some of some model-independent hyperparameters ### TODO: properly get SPA.__version__
+    general_hyper = {'SPA version': '1.4.2', 'CV method': cv_method, 'Number of folds (K)': K_fold} # Some of some model-independent hyperparameters ### TODO: properly get SPA.__version__
     if 're' in cv_method.casefold():
         general_hyper['Number of CV repeats'] = Nr
     general_hyper['Robust priority'] = robust_priority
     general_hyper['Train data'] = f'File named \'{main_data}\' with shape {X.shape}'
     if main_data_y:
-        general_hyper['Train data, y'] = f'File named \'{fmain_data_y}\''
+        general_hyper['Train data, y'] = f'File named \'{main_data_y}\''
     if test_data:
         general_hyper['Test data'] = f'File named \'{test_data}\' with shape {X_test.shape}'
     if test_data_y:
@@ -426,8 +426,8 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
                         class_weight = class_weight, scheduler = scheduler, scheduler_mode = scheduler_mode, scheduler_factor = scheduler_factor,
                         scheduler_patience = scheduler_patience, scheduler_last_epoch = scheduler_last_epoch, scheduler_warmup = scheduler_warmup,
                         val_loss_file = val_loss_file, expand_hyperparameter_search = expand_hyperparameter_search, verbosity_level = verbosity_level)
-                    fitting_result[this_model] = {'final_model': temp[0], 'mse_train': temp[2], 'mse_val': temp[1].min().min(), 'mse_test': temp[3],
-                                                  'best_hyperparameters': temp[6], 'yhat_train': temp[4], 'yhat_test': temp[5]}
+                    fitting_result[this_model] = OrderedDict({'final_model': temp[0], 'mse_train': temp[2], 'mse_val': temp[1].min().min(), 'mse_test': temp[3],
+                                                        'best_hyperparameters': temp[6], 'yhat_train': temp[4], 'yhat_test': temp[5]})
                     if verbosity_level: print(f'Completed model {this_model}' + ' '*15)
 
         else: # Nested CV
