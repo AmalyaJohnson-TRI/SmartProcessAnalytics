@@ -1,16 +1,20 @@
 import statsmodels.api as sm
 from SPLS_Python import SPLS
-from sklearn.linear_model import ElasticNet
+from sklearn.linear_model import LinearRegression, ElasticNet, LogisticRegression
 from sklearn.cross_decomposition import PLSRegression
 from sklearn.preprocessing import StandardScaler, PolynomialFeatures
 from sklearn.metrics import mean_squared_error as MSE
+from sklearn.metrics import confusion_matrix
+# from sklearn.metrics import log_loss
+from torch import Tensor, LongTensor
+from torch.nn import CrossEntropyLoss
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, AdaBoostRegressor
 from sklearn.svm import SVR
 import numpy as np
 import warnings
 warnings.filterwarnings("ignore") # TODO: Want to just ignore the PLS constant residual warnings, but this will do for now
 
-def OLS_fitting(X, y, X_test, y_test):
+def OLS_fitting(X, y, X_test, y_test, classification = False, class_weight = None, random_state = 0):
     """
     Fits data using ordinary least squares: y = a*x1 + b*x2 + ...
 
@@ -20,18 +24,33 @@ def OLS_fitting(X, y, X_test, y_test):
         Training data predictors and response.
     X_test, y_test : Numpy array with shape N_test x m, N_test x 1
         Testing data predictors and response.
+    classification : bool, optional, default = False
+        Whether to train a model for a classification (True) or regression (False) task.
+    class_weight : array, optional, default = None
+        The class weights for each class.
+        SPA automatically sets this to an array of ones (equal weights) if the user did not input anything to SPA.main_SPA()
+    random_state : int or None, optional, default = 0
+        Seed for the random number generator. Relevant only when classification == True.
     """
 
-    # Training
-    OLS_model = sm.OLS(y, X).fit()
-    yhat_train = OLS_model.predict()
-    mse_train = MSE(y, yhat_train)
-    OLS_params = OLS_model.params.reshape(-1,1) # Fitted parameters
-    
-    # Testing
-    yhat_test = OLS_model.predict(X_test)
-    mse_test = MSE(y_test, yhat_test)
-    return(OLS_model, OLS_params, mse_train, mse_test, yhat_train, yhat_test)
+    if not classification:
+        OLS_model = LinearRegression().fit(X, y)
+        yhat_train = OLS_model.predict(X)
+        yhat_test = OLS_model.predict(X_test)
+        loss_train = MSE(y, yhat_train)
+        loss_test = MSE(y_test, yhat_test)
+    else:
+        if class_weight is None:
+            class_weight = np.ones(len( set(y.squeeze()) ))
+        OLS_model = LogisticRegression(penalty = None, solver = 'saga', multi_class = 'multinomial', random_state = random_state).fit(X, y)
+        yhat_train = OLS_model.predict_proba(X)
+        yhat_test = OLS_model.predict_proba(X_test)
+        pred_class_train = yhat_train.argmax(axis=1)
+        loss_train = _classification_score(y, pred_class_train, class_weight)
+        pred_class_test = yhat_test.argmax(axis=1)
+        loss_test = _classification_score(y_test, pred_class_test, class_weight)
+    OLS_params = OLS_model.coef_
+    return(OLS_model, OLS_params, loss_train, loss_test, yhat_train, yhat_test)
 
 def SPLS_fitting(X, y, X_test, y_test, K = None, eta = None, eps = 1e-4, maxstep = 1000):
     """
@@ -65,7 +84,7 @@ def SPLS_fitting(X, y, X_test, y_test, K = None, eta = None, eps = 1e-4, maxstep
 
     return SPLS_model, SPLS_params, mse_train, mse_test, yhat_train, yhat_test
 
-def EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter = 10000, tol = 1e-4, random_state = 0):
+def EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter = 10000, tol = 1e-4, random_state = 0, classification = False, class_weight = None):
     """
     Fits data using sklearn's Elastic Net model
 
@@ -83,18 +102,34 @@ def EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter = 10000, tol = 1e
         The maximum number of iterations
     random_state : int or None, optional, default = 0
         Seed for the random number generator.
+    classification : bool, optional, default = False
+        Whether to train a model for a classification (True) or regression (False) task.
+    class_weight : array, optional, default = None
+        The class weights for each class.
+        SPA automatically sets this to an array of ones (equal weights) if the user did not input anything to SPA.main_SPA()
     """
-    EN_model = ElasticNet(random_state = random_state, alpha = alpha, l1_ratio = l1_ratio, fit_intercept = False, max_iter = max_iter, tol = tol)
-    EN_model.fit(X, y)
-    EN_params = EN_model.coef_ # Fitted parameters
-    # Predictions and MSEs
-    yhat_train = EN_model.predict(X).reshape((-1,1))
-    mse_train = MSE(y, yhat_train)
-    yhat_test = EN_model.predict(X_test).reshape((-1,1))
-    mse_test = MSE(y_test, yhat_test)
-    return (EN_model, EN_params, mse_train, mse_test, yhat_train, yhat_test)
+    if not classification:
+        EN_model = ElasticNet(alpha = alpha, l1_ratio = l1_ratio, random_state = random_state, fit_intercept = False, max_iter = max_iter, tol = tol)
+        EN_model.fit(X, y)
+        yhat_train = EN_model.predict(X)
+        yhat_test = EN_model.predict(X_test)
+        loss_train = MSE(y, yhat_train)
+        loss_test = MSE(y_test, yhat_test)
+    else:
+        if class_weight is None:
+            class_weight = np.ones(len( set(y.squeeze()) ))
+        EN_model = LogisticRegression(penalty = 'elasticnet', C = 1/alpha, l1_ratio = l1_ratio, solver = 'saga', multi_class = 'multinomial', random_state = random_state).fit(X, y)
+        yhat_train = EN_model.predict_proba(X)
+        yhat_test = EN_model.predict_proba(X_test)
+        pred_class_train = yhat_train.argmax(axis=1)
+        loss_train = _classification_score(y, pred_class_train, class_weight)
+        pred_class_test = yhat_test.argmax(axis=1)
+        loss_test = _classification_score(y_test, pred_class_test, class_weight)
+    EN_params = EN_model.coef_.squeeze()
+    return (EN_model, EN_params, loss_train, loss_test, yhat_train, yhat_test)
 
-def LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, min_lag = 0, trans_type = 'all', interaction = True, selection = None, transform_y = False, all_pos_X = True, all_pos_y = True):
+def LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, min_lag = 0, trans_type = 'all', interaction = True, selection = None, transform_y = False,
+                 all_pos_X = True, all_pos_y = True, scale_X = True, scale_y = True, classification = False, class_weight = None):
     """
     Fits data using the LASSO-Clip-EN (LCEN) algorithm (doi.org/10.48550/arXiv.2402.17120).
     LCEN is a powerful, non-linear, and interpretable feature selection algorithm with considerable feature selection capabilities, model accuracy, and speed.
@@ -139,6 +174,13 @@ def LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, min
             sqrt(k) for some k<0 when the features are transformed/expanded.
         This used to be determined within _feature_trans(), but it leads to array size problems when some folds have negative ...
             entries and some do not.
+    scale_X, scale_y : boolean, optional, default = True
+        Whether to scale the X/y data.
+    classification : bool, optional, default = False
+        Whether to train a model for a classification (True) or regression (False) task.
+    class_weight : array, optional, default = None
+        The class weights for each class.
+        SPA automatically sets this to an array of ones (equal weights) if the user did not input anything to SPA.main_SPA()
     """
     # Expanding the X features
     if not transform_y and X.shape[1] > 0:
@@ -171,15 +213,16 @@ def LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, min
                     label_names[elem_idx] = elem.replace(f'x{idx}', replacement)
 
     # Scale data (mean = 0, stdev = 1)
-    if X.shape[0] > 0 and X.shape[1] > 0: # StandardScaler requires at least one feature and one sample to work
+    if scale_X and X.shape[0] > 0 and X.shape[1] > 0: # StandardScaler requires at least one feature and one sample to work
         scaler_x = StandardScaler(with_mean=True, with_std=True)
         scaler_x.fit(X)
         X = scaler_x.transform(X)
         X_test = scaler_x.transform(X_test)
-    scaler_y = StandardScaler(with_mean=True, with_std=True)
-    scaler_y.fit(y)
-    y = scaler_y.transform(y)
-    y_test = scaler_y.transform(y_test)
+    if scale_y and not classification:
+        scaler_y = StandardScaler(with_mean=True, with_std=True)
+        scaler_y.fit(y)
+        y = scaler_y.transform(y)
+        y_test = scaler_y.transform(y_test)
 
     if selection is not None:
         X = X[:, selection]
@@ -193,13 +236,16 @@ def LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, min
         yhat_train = np.zeros(y.shape) # Ok to be 0 because y is scaled --> mean(y) is approximately 0
         yhat_test = np.zeros(y_test.shape)
     else:
-        LCEN_model, LCEN_params, mse_train, mse_test, yhat_train, yhat_test = EN_fitting(X, y, X_test, y_test, alpha, l1_ratio)
-    # Calculating information criteria values
-    num_train = X.shape[0] # Typically written as n
-    num_parameter = (LCEN_params!=0).flatten().sum() # Typically written as k
-    AIC = num_train*np.log(mse_train) + 2*num_parameter # num_train * log(MSE) is one of the formulae to replace L. Shown in https://doi.org/10.1002/wics.1460, for example.
-    AICc = AIC + 2*num_parameter*(num_parameter+1) / (num_train - num_parameter - 1)
-    BIC = num_train*np.log(mse_train) + num_parameter*np.log(num_train)
+        LCEN_model, LCEN_params, mse_train, mse_test, yhat_train, yhat_test = EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, classification = classification, class_weight = class_weight)
+    if not classification:
+        # Calculating information criteria values
+        num_train = X.shape[0] # Typically written as n
+        num_parameter = (LCEN_params!=0).flatten().sum() # Typically written as k
+        AIC = num_train*np.log(mse_train) + 2*num_parameter # num_train * log(MSE) is one of the formulae to replace L. Shown in https://doi.org/10.1002/wics.1460, for example.
+        AICc = AIC + 2*num_parameter*(num_parameter+1) / (num_train - num_parameter - 1)
+        BIC = num_train*np.log(mse_train) + num_parameter*np.log(num_train)
+    else:
+        AIC, AICc, BIC = 0, 0, 0
     return (LCEN_model, LCEN_params, mse_train, mse_test, yhat_train, yhat_test, label_names, (AIC, AICc, BIC))
 
 def forest_fitting(X, y, X_test, y_test, n_estimators = 100, max_depth = 10, min_samples_leaf = 0.1, max_features = 1.0, learning_rate = None, random_state = 0):
@@ -357,10 +403,6 @@ def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type 
     if trans_type.casefold() == 'all':
         # Setting up the transforms
         Xlog = np.where(X!=0, np.log(np.abs(X)), -50) # Avoiding log(0) = -inf
-        # if X_test is not None: # Columns where all entries are >= 0 for sqrt
-        #     all_pos = np.all(X >= 0, axis = 0) & np.all(X_test >= 0, axis = 0)
-        # else:
-        #     all_pos = np.all(X >= 0, axis = 0)
         Xsqrt = np.sqrt(X[:, all_pos])
         Xinv = 1/X
         Xinv[Xinv == np.inf] = 1e15
@@ -441,3 +483,17 @@ def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type 
                     X_test_out = np.column_stack((X_test_out, normal_plus_half_interaction, log_inv_interaction, inv_minus_half_interaction, log_inv_minus_oneandhalf_interaction))
 
     return (X_out, X_test_out, label_names)
+
+def _classification_score(y, pred_class, class_weight):
+    """
+    Returns the recall, precision, F1, and MCC for a given set of predictions
+    """
+    CM = confusion_matrix(y, pred_class)
+    rec = np.diag(CM)/CM.sum(axis=1)
+    pre = np.diag(CM)/CM.sum(axis=0)
+    f1 = 2/(1/rec + 1/pre)
+    CM = CM.astype(float) # Converting to float to avoid overflow errors when calculating the MCC
+    MCC = (np.diag(CM).sum()*CM.sum() - (CM.sum(axis=0)*CM.sum(axis=1)).sum()) / (np.sqrt(CM.sum()**2 - (CM.sum(axis=0)**2).sum()) * np.sqrt(CM.sum()**2 - (CM.sum(axis=1)**2).sum()))
+    loss_dict = {'Recall per class': np.round(rec, 5), 'Mean Recall': round((class_weight*rec).sum()/class_weight.sum(), 5), 'Precision per class': np.round(pre, 5),
+                    'Mean Precision': round((class_weight*pre).sum()/class_weight.sum(), 5), 'F1 per class': np.round(f1, 5), 'Mean F1': round((class_weight*f1).sum()/class_weight.sum(), 5), 'MCC': round(MCC, 5)}
+    return loss_dict
