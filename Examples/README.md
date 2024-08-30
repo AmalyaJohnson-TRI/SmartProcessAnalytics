@@ -7,20 +7,20 @@ There are many ways to call SPA for automatic model training and testing. The si
 ## Manually select a CV method
 `import SPA; _ = SPA.main_SPA('poly_1000x5-data_1to10-range_1-degree_123456789-seed_(0,0)-noise.csv', cv_method = 'KFold')`
 ## Manually select a model (or models)
-`import SPA; _ = SPA.main_SPA('poly_1000x5-data_1to10-range_1-degree_123456789-seed_(0,0)-noise.csv', model_name = ['ALVEN'])`<br>
-`import SPA; _ = SPA.main_SPA('poly_1000x5-data_1to10-range_1-degree_123456789-seed_(0,0)-noise.csv', model_name = ['ALVEN', 'EN', 'PLS'])`<br>
+`import SPA; _ = SPA.main_SPA('poly_1000x5-data_1to10-range_1-degree_123456789-seed_(0,0)-noise.csv', model_name = ['LCEN'])`<br>
+`import SPA; _ = SPA.main_SPA('poly_1000x5-data_1to10-range_1-degree_123456789-seed_(0,0)-noise.csv', model_name = ['LCEN', 'EN', 'PLS'])`<br>
 `import SPA; _ = SPA.main_SPA('poly_1000x5-data_1to10-range_1-degree_123456789-seed_(0,0)-noise.csv', model_name = ['MLP'])`
 ## Asking SPA to use dynamic models
 `import SPA; _ = SPA.main_SPA('poly_1000x5-data_1to10-range_1-degree_123456789-seed_(0,0)-noise.csv', dynamic_model = True)`
 ## Restrict what values will be tested for some hyperparameter(s)
-`import SPA; _ = SPA.main_SPA('poly_1000x5-data_1to10-range_1-degree_123456789-seed_(0,0)-noise.csv', model_name = ['ALVEN'], l1_ratio = [0, 0.5, 0.99])`<br>
-`import SPA; _ = SPA.main_SPA('poly_1000x5-data_1to10-range_1-degree_123456789-seed_(0,0)-noise.csv', cv_method = 'KFold', model_name = ['ALVEN'], degree = list(range(1, 6)))`<br>
+`import SPA; _ = SPA.main_SPA('poly_1000x5-data_1to10-range_1-degree_123456789-seed_(0,0)-noise.csv', model_name = ['LCEN'], l1_ratio = [0, 0.5, 0.99])`<br>
+`import SPA; _ = SPA.main_SPA('poly_1000x5-data_1to10-range_1-degree_123456789-seed_(0,0)-noise.csv', cv_method = 'KFold', model_name = ['LCEN'], degree = list(range(1, 6)))`<br>
 `import SPA; _ = SPA.main_SPA('poly_1000x5-data_1to10-range_1-degree_123456789-seed_(0,0)-noise.csv', cv_method = 'KFold', model_name = ['MLP'], activation = ['relu', 'tanh'], weight_decay = 1e-2)`<br>
-`import SPA; _ = SPA.main_SPA('poly_1000x5-data_1to10-range_1-degree_123456789-seed_(0,0)-noise.csv', cv_method = 'KFold', lag = [0, 1, 2], model_name = ['DALVEN'])`
+`import SPA; _ = SPA.main_SPA('poly_1000x5-data_1to10-range_1-degree_123456789-seed_(0,0)-noise.csv', cv_method = 'KFold', lag = [0, 1, 2], model_name = ['LCEN'])`
 ## Plotting the data interrogation results (relevant only when `model_name` is not passed to SPA)
 `import SPA; _ = SPA.main_SPA('poly_1000x5-data_1to10-range_1-degree_123456789-seed_(0,0)-noise.csv', plot_interrogation = True)`
 ## Real example: investigating the Concrete Strength dataset of I. Yeh
-First, split [Concrete_data.csv](Concrete_data.csv) into a cross-validation and test set (for example, with sklearn's `train_test_split`)<br>
+First, split [Concrete_data.csv](Concrete_data.csv) into cross-validation and test sets (for example, with sklearn's `train_test_split`)<br>
 `import SPA; _ = SPA.main_SPA('Concrete_data_train.csv', test_data = 'Concrete_data_test.csv', cv_method = 'KFold', model_name = ['LCEN'], degree = [4], LCEN_cutoff = 4e-2)`<br>
 `import SPA; _ = SPA.main_SPA('Concrete_data_train.csv', test_data = 'Concrete_data_test.csv', cv_method = 'KFold', model_name = ['MLP'], learning_rate = [0.001, 0.005, 0.01], activation = ['relu', 'tanhshrink'], scheduler = 'cosine')`
 
