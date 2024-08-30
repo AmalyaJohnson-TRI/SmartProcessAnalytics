@@ -32,7 +32,7 @@ def nonlinearity_assess(X, y, plot = True, cat = None, alpha = 0.01, difference 
     Output:
         int, whether there is nonlinearity in dataset
     """
-    poly, _, _ = _feature_trans(X, degree = 2, interaction = True, trans_type = 'simple_interaction')
+    poly, _, _ = _feature_trans(X, degree = 2, interaction = True, trans_type = 'simple_interaction', all_pos_X = np.all(X >= 0, axis = 0))
     Bi = poly[:, X.shape[1]:] # Just the interaction terms and not the intercept or x0, x1, ..., xN terms
   
     # Nonlinearity by linear correlation, quadratic test, and maximal correlation
@@ -304,7 +304,7 @@ def dynamic_assess(x, plot = True, y = None, round_number = 0, alpha = 0.01, fre
         plt.savefig(f'FFT_{round_number}.png', dpi = 600, bbox_inches='tight')
     return (acf_lag, pacf_lag)
   
-def residual_analysis(X, y, y_hat, plot = True, nlag = None, alpha = 0.01, round_number = 0, log_transform = False):
+def residual_analysis(X, y, y_hat, plot = True, nlag = None, alpha = 0.01, round_number = 0):
     """
     This funcion assesses the residuals (heteroscedasticity and dyanmics)
     Heteroscedasticity is tested on Breusch-Pagan Test and White Test
@@ -313,25 +313,13 @@ def residual_analysis(X, y, y_hat, plot = True, nlag = None, alpha = 0.01, round
     Input: 
         X: independent variables of size N x m
         y_hat: fitted dependent variable of size N x 1
-        residual: residuals of size N x 1
         alpha: significance level for statistical tests
 
     Output:
         figures, residual analysis
         (int_heteroscedasticity, int_dynamics), whether there is heteroscedasticity and dynamics
     """
-    print('=== Residual Analysis ===')
-    if log_transform:
-        y = np.exp(y)
-        y_hat = np.exp(y_hat)
-        # ytrain = np.exp(ytrain)
-        # ytrain_hat = np.exp(ytrain_hat)
-
     residual = y - y_hat
-    RMSE = np.sqrt(np.mean((residual)**2))
-    APE = np.mean(np.abs((residual) / y)) * 100
-    print(f'RMSE = {RMSE}')
-    print(f'APE = {APE}')
 
     if nlag is None:
         if y.shape[0] < 40:
