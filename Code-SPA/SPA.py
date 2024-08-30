@@ -404,7 +404,7 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
 
     # Setting up a dict to save results (hyperparameters and predictions)
     fitting_result = {}
-    general_hyper = {'SPA version': '1.5.0-beta', 'CV method': cv_method, 'Number of folds (K)': K_fold} # Some of some model-independent hyperparameters ### TODO: properly get SPA.__version__
+    general_hyper = {'SPA version': '1.5.0', 'CV method': cv_method, 'Number of folds (K)': K_fold} # Some of some model-independent hyperparameters ### TODO: properly get SPA.__version__
     if 're' in cv_method.casefold():
         general_hyper['Number of CV repeats'] = Nr
     general_hyper['Robust priority'] = robust_priority
@@ -580,6 +580,10 @@ def main_SPA(main_data, main_data_y = None, test_data = None, test_data_y = None
     with open(f'SPA_results_{time_now}.json', 'w') as f:
         json.dump(fr2, f, indent = 4)
     if verbosity_level: print(f'The best model is {selected_model}. View its results via fitting_result["{selected_model}"] or by opening the SPA_results json/pickle files.')
+    if verbosity_level >= 2 and not classification: print(f'Train set: RMSE = {fitting_result[selected_model]["RMSE_train_nontrans"]:.4f} | Mean relative error = {fitting_result[selected_model]["Mean_relative_error_train"]:.4f}')
+    if verbosity_level and not classification: print(f'Test set : RMSE = {fitting_result[selected_model]["RMSE_test_nontrans"]:.4f} | Mean relative error = {fitting_result[selected_model]["Mean_relative_error_test"]:.4f}')
+    if verbosity_level >= 2 and classification: print(f'Train set: Mean F1 = {fitting_result[selected_model]["mse_train"]["Mean F1"]:.4f} | MCC = {fitting_result[selected_model]["mse_train"]["MCC"]:.4f}')
+    if verbosity_level and classification: print(f'Test set : Mean F1 = {fitting_result[selected_model]["mse_test"]["Mean F1"]:.4f} | MCC = {fitting_result[selected_model]["mse_test"]["MCC"]:.4f}')
     return fitting_result, selected_model
 
 def load_file(filename):
