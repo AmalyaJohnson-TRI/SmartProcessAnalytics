@@ -8,8 +8,8 @@ from sklearn.metrics import confusion_matrix
 # from sklearn.metrics import log_loss
 from torch import Tensor, LongTensor
 from torch.nn import CrossEntropyLoss
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, AdaBoostRegressor
-from sklearn.svm import SVR
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, AdaBoostRegressor, RandomForestClassifier, GradientBoostingClassifier, AdaBoostClassifier
+from sklearn.svm import SVR, SVC
 import numpy as np
 import warnings
 warnings.filterwarnings("ignore") # TODO: Want to just ignore the PLS constant residual warnings, but this will do for now
@@ -125,11 +125,11 @@ def EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, max_iter = 10000, tol = 1e
         loss_train = _classification_score(y, pred_class_train, class_weight)
         pred_class_test = yhat_test.argmax(axis=1)
         loss_test = _classification_score(y_test, pred_class_test, class_weight)
-    EN_params = EN_model.coef_.squeeze()
+    EN_params = EN_model.coef_
     return (EN_model, EN_params, loss_train, loss_test, yhat_train, yhat_test)
 
 def LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, min_lag = 0, trans_type = 'all', interaction = True, selection = None, transform_y = False,
-                 all_pos_X = True, all_pos_y = True, scale_X = True, scale_y = True, classification = False, class_weight = None):
+                 all_pos_X = None, all_pos_y = True, scale_X = True, scale_y = True, classification = False, class_weight = None):
     """
     Fits data using the LASSO-Clip-EN (LCEN) algorithm (doi.org/10.48550/arXiv.2402.17120).
     LCEN is a powerful, non-linear, and interpretable feature selection algorithm with considerable feature selection capabilities, model accuracy, and speed.
@@ -173,7 +173,7 @@ def LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, min
         Whether all entries in the X/y data are positive or also contain some negative entries. This is done to avoid taking ...
             sqrt(k) for some k<0 when the features are transformed/expanded.
         This used to be determined within _feature_trans(), but it leads to array size problems when some folds have negative ...
-            entries and some do not.
+            entries and some do not, as the number of features will vary per fold.
     scale_X, scale_y : boolean, optional, default = True
         Whether to scale the X/y data.
     classification : bool, optional, default = False
@@ -182,6 +182,10 @@ def LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, min
         The class weights for each class.
         SPA automatically sets this to an array of ones (equal weights) if the user did not input anything to SPA.main_SPA()
     """
+    if all_pos_X is None: # all_pos_X is never None, unless this function is called manually by the end-user
+        all_pos_X = np.all(X >= 0, axis = 0)
+        if X_test:
+            all_pos_X = all_pos_X & np.all(X_test >= 0, axis = 0)
     # Expanding the X features
     if not transform_y and X.shape[1] > 0:
         X, X_test, label_names = _feature_trans(X, X_test, degree, interaction, trans_type, all_pos_X, all_pos_y)
@@ -231,24 +235,24 @@ def LCEN_fitting(X, y, X_test, y_test, alpha, l1_ratio, degree = 1, lag = 0, min
     if X.shape[1] == 0:
         LCEN_model = None
         LCEN_params = np.empty(0)
-        mse_train = np.var(y)
-        mse_test = np.var(y_test)
+        loss_train = np.var(y) # TODO: for classification, this is not var(y) but guessing only the majority class and calculating the metrics from there
+        loss_test = np.var(y_test)
         yhat_train = np.zeros(y.shape) # Ok to be 0 because y is scaled --> mean(y) is approximately 0
         yhat_test = np.zeros(y_test.shape)
     else:
-        LCEN_model, LCEN_params, mse_train, mse_test, yhat_train, yhat_test = EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, classification = classification, class_weight = class_weight)
+        LCEN_model, LCEN_params, loss_train, loss_test, yhat_train, yhat_test = EN_fitting(X, y, X_test, y_test, alpha, l1_ratio, classification = classification, class_weight = class_weight)
     if not classification:
         # Calculating information criteria values
         num_train = X.shape[0] # Typically written as n
         num_parameter = (LCEN_params!=0).flatten().sum() # Typically written as k
-        AIC = num_train*np.log(mse_train) + 2*num_parameter # num_train * log(MSE) is one of the formulae to replace L. Shown in https://doi.org/10.1002/wics.1460, for example.
+        AIC = num_train*np.log(loss_train) + 2*num_parameter # num_train * log(MSE) is one of the formulae to replace L. Shown in https://doi.org/10.1002/wics.1460, for example.
         AICc = AIC + 2*num_parameter*(num_parameter+1) / (num_train - num_parameter - 1)
-        BIC = num_train*np.log(mse_train) + num_parameter*np.log(num_train)
+        BIC = num_train*np.log(loss_train) + num_parameter*np.log(num_train)
     else:
         AIC, AICc, BIC = 0, 0, 0
-    return (LCEN_model, LCEN_params, mse_train, mse_test, yhat_train, yhat_test, label_names, (AIC, AICc, BIC))
+    return (LCEN_model, LCEN_params, loss_train, loss_test, yhat_train, yhat_test, label_names, (AIC, AICc, BIC))
 
-def forest_fitting(X, y, X_test, y_test, n_estimators = 100, max_depth = 10, min_samples_leaf = 0.1, max_features = 1.0, learning_rate = None, random_state = 0):
+def forest_fitting(X, y, X_test, y_test, n_estimators = 100, max_depth = 10, min_samples_leaf = 0.1, max_features = 1.0, learning_rate = None, random_state = 0, classification = False, class_weight = None):
     """
     Fits data using a random forest or gradient-boosted decision trees
 
@@ -274,22 +278,42 @@ def forest_fitting(X, y, X_test, y_test, n_estimators = 100, max_depth = 10, min
         If None, a random forest regressor is used.
     random_state : int or None, optional, default = 0
         Seed for the random number generator.
+    classification : bool, optional, default = False
+        Whether to train a model for a classification (True) or regression (False) task.
+    class_weight : array, optional, default = None
+        The class weights for each class.
+        SPA automatically sets this to an array of ones (equal weights) if the user did not input anything to SPA.main_SPA()
     """
-    if learning_rate is None or learning_rate == 0:
+    if (learning_rate is None or learning_rate == 0) and not classification:
         forest = RandomForestRegressor(n_estimators, max_depth = max_depth, random_state = random_state, max_features = max_features, min_samples_leaf = min_samples_leaf)
-    else:
+    elif not classification:
         forest = GradientBoostingRegressor(n_estimators = n_estimators, learning_rate = learning_rate, max_depth = max_depth, random_state = random_state,
                                            max_features = max_features, min_samples_leaf = min_samples_leaf)
+    elif learning_rate is None or learning_rate == 0:
+        forest = RandomForestClassifier(n_estimators, max_depth = max_depth, random_state = random_state, max_features = max_features, min_samples_leaf = min_samples_leaf)
+    else:
+        forest = GradientBoostingClassifier(n_estimators = n_estimators, learning_rate = learning_rate, max_depth = max_depth, random_state = random_state,
+                                           max_features = max_features, min_samples_leaf = min_samples_leaf)
     forest.fit(X, y.flatten())
-    # Predictions and MSEs
-    yhat_train = forest.predict(X)
-    yhat_test = forest.predict(X_test)
-    mse_train = MSE(y, yhat_train)
-    mse_test = MSE(y_test, yhat_test)
+    # Predictions and metrics
+    if not classification:
+        yhat_train = forest.predict(X)
+        yhat_test = forest.predict(X_test)
+        loss_train = MSE(y, yhat_train)
+        loss_test = MSE(y_test, yhat_test)
+    else:
+        if class_weight is None:
+            class_weight = np.ones(len( set(y.squeeze()) ))
+        yhat_train = forest.predict_proba(X)
+        yhat_test = forest.predict_proba(X_test)
+        pred_class_train = yhat_train.argmax(axis=1)
+        loss_train = _classification_score(y, pred_class_train, class_weight)
+        pred_class_test = yhat_test.argmax(axis=1)
+        loss_test = _classification_score(y_test, pred_class_test, class_weight)
 
-    return (forest, mse_train, mse_test, yhat_train, yhat_test)
+    return (forest, loss_train, loss_test, yhat_train, yhat_test)
 
-def SVM_fitting(X, y, X_test, y_test, gamma = 'scale', C = 100, epsilon = 0.1, tol = 1e-4, max_iter = 10000):
+def SVM_fitting(X, y, X_test, y_test, gamma = 'scale', C = 100, epsilon = 0.1, tol = 1e-4, max_iter = 10000, classification = False, class_weight = None):
     """
     Support Vector Machine-based regression
 
@@ -306,21 +330,40 @@ def SVM_fitting(X, y, X_test, y_test, gamma = 'scale', C = 100, epsilon = 0.1, t
     C : float > 0, optional, default = 100
         Parameter inversely proportional to the strength of the regularization
     epsilon : float >= 0, optional, default = 0.1
-        Epsilon-tube within which no penalty is associated in the training loss function
+        Epsilon-tube within which no penalty is associated in the training loss function.
+        Relevant only when classification == False.
     max_iter : int, optional, default = 10000
         The maximum number of iterations
+    classification : bool, optional, default = False
+        Whether to train a model for a classification (True) or regression (False) task.
+    class_weight : array, optional, default = None
+        The class weights for each class.
+        SPA automatically sets this to an array of ones (equal weights) if the user did not input anything to SPA.main_SPA()
     """
-    SVM_model = SVR(gamma = gamma, C = C, epsilon = epsilon, tol = tol, max_iter = max_iter)
+    if not classification:
+        SVM_model = SVR(gamma = gamma, C = C, epsilon = epsilon, tol = tol, max_iter = max_iter)
+    else:
+        SVM_model = SVC(gamma = gamma, C = C, probability = True, tol = tol, max_iter = max_iter)
     SVM_model.fit(X, y.flatten())
-    # Predictions and MSEs
-    yhat_train = SVM_model.predict(X)
-    yhat_test = SVM_model.predict(X_test)
-    mse_train = MSE(y, yhat_train)
-    mse_test = MSE(y_test, yhat_test)
+    # Predictions and metrics
+    if not classification:
+        yhat_train = SVM_model.predict(X)
+        yhat_test = SVM_model.predict(X_test)
+        loss_train = MSE(y, yhat_train)
+        loss_test = MSE(y_test, yhat_test)
+    else:
+        if class_weight is None:
+            class_weight = np.ones(len( set(y.squeeze()) ))
+        yhat_train = SVM_model.predict_proba(X)
+        yhat_test = SVM_model.predict_proba(X_test)
+        pred_class_train = yhat_train.argmax(axis=1)
+        loss_train = _classification_score(y, pred_class_train, class_weight)
+        pred_class_test = yhat_test.argmax(axis=1)
+        loss_test = _classification_score(y_test, pred_class_test, class_weight)
 
-    return (SVM_model, mse_train, mse_test, yhat_train, yhat_test)
+    return (SVM_model, loss_train, loss_test, yhat_train, yhat_test)
 
-def AdaBoost_fitting(X, y, X_test, y_test, n_estimators = 50, learning_rate = 0.1, random_state = 0):
+def AdaBoost_fitting(X, y, X_test, y_test, n_estimators = 50, learning_rate = 0.1, random_state = 0, classification = False, class_weight = None):
     """
     Adaptive Boosting regression
 
@@ -338,18 +381,36 @@ def AdaBoost_fitting(X, y, X_test, y_test, n_estimators = 50, learning_rate = 0.
         If None, a random forest regressor is used.
     random_state : int or None, optional, default = 0
         Seed for the random number generator.
+    classification : bool, optional, default = False
+        Whether to train a model for a classification (True) or regression (False) task.
+    class_weight : array, optional, default = None
+        The class weights for each class.
+        SPA automatically sets this to an array of ones (equal weights) if the user did not input anything to SPA.main_SPA()
     """
-    AdaB_model = AdaBoostRegressor(n_estimators = n_estimators, learning_rate = learning_rate, loss = 'square', random_state = random_state)
+    if not classification:
+        AdaB_model = AdaBoostRegressor(n_estimators = n_estimators, learning_rate = learning_rate, loss = 'square', random_state = random_state)
+    else:
+        AdaB_model = AdaBoostClassifier(n_estimators = n_estimators, learning_rate = learning_rate, algorithm = 'SAMME', random_state = random_state)
     AdaB_model.fit(X, y.flatten())
-    # Predictions and MSEs
-    yhat_train = AdaB_model.predict(X)
-    yhat_test = AdaB_model.predict(X_test)
-    mse_train = MSE(y, yhat_train)
-    mse_test = MSE(y_test, yhat_test)
+    # Predictions and metrics
+    if not classification:
+        yhat_train = AdaB_model.predict(X)
+        yhat_test = AdaB_model.predict(X_test)
+        loss_train = MSE(y, yhat_train)
+        loss_test = MSE(y_test, yhat_test)
+    else:
+        if class_weight is None:
+            class_weight = np.ones(len( set(y.squeeze()) ))
+        yhat_train = AdaB_model.predict_proba(X)
+        yhat_test = AdaB_model.predict_proba(X_test)
+        pred_class_train = yhat_train.argmax(axis=1)
+        loss_train = _classification_score(y, pred_class_train, class_weight)
+        pred_class_test = yhat_test.argmax(axis=1)
+        loss_test = _classification_score(y_test, pred_class_test, class_weight)
 
-    return (AdaB_model, mse_train, mse_test, yhat_train, yhat_test)
+    return (AdaB_model, loss_train, loss_test, yhat_train, yhat_test)
 
-def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type = 'all', all_pos_X = True, all_pos_y = True):
+def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type = 'all', all_pos_X = None, all_pos_y = True):
     """
     A helper function that is automatically called by SPA.
     Performs non-linear transformations of X (and X_test). Transformations include polynomial transforms up to "degree", ...
@@ -378,9 +439,13 @@ def _feature_trans(X, X_test = None, degree = 2, interaction = True, trans_type 
         Whether all entries in the data are positive or also contain some negative entries. This is done to avoid taking ...
             sqrt(k) for some k<0.
         This used to be determined within this function, but it leads to array size problems when some folds have negative ...
-            entries and some do not.
+            entries and some do not, as the number of features will vary per fold.
     """
     X_test_out = None # Declaring this variable to avoid errors when doing the return statement
+    if all_pos_X is None: # all_pos_X is never None, unless this function is called manually by the end-user
+        all_pos_X = np.all(X >= 0, axis = 0) # This assumes [perhaps incorrectly] that all entries of X are indeed X entries (and not y entries that were concatenated because LCEN_transform_y == True)
+        if X_test: # X_test may be None
+            all_pos_X = all_pos_X & np.all(X_test >= 0, axis = 0)
 
     # Polynomial transforms (and interaction terms)
     poly = PolynomialFeatures(degree, include_bias = False, interaction_only = trans_type.casefold() == 'simple_interaction', order = 'F') # Switching to Fortran order to speed up Elastic Net (and LCEN) [but does not make any significant difference]
